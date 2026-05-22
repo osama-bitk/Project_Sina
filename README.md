@@ -6,14 +6,13 @@ See [`project_sina_plan.md`](./project_sina_plan.md) for the full plan, phasing,
 
 ## Status
 
-**Phase 2 complete. Voice → tool call works end-to-end on Mac.**
+**Phase 3 in progress: IR reconnaissance against the LG remote.**
 
 - Phase 1: `sina-medium` (qwen2.5:3b) picked as production model, 83% on 87-case benchmark.
 - Phase 2: `mac/voice.py` records, transcribes via `faster-whisper`, pipes to `brain.parse`. Interactive Enter-to-record loop plus `--audio FILE` for testing.
+- Phase 3: ESP32 decoder sketch + capture procedure ready in `esp32/`. Awaiting captured codes in `ir_codes/lg_ac.json`.
 
-Next up: Phase 3 — ESP32 IR reconnaissance against the LG remote.
-
-See [`mac/README.md`](./mac/README.md), [`benchmarks/README.md`](./benchmarks/README.md), and [`project_sina_plan.md`](./project_sina_plan.md) for details.
+See [`esp32/README.md`](./esp32/README.md) for the Phase 3 setup and capture procedure, [`mac/README.md`](./mac/README.md) for the brain, and [`project_sina_plan.md`](./project_sina_plan.md) for the full plan.
 
 ## Repo layout
 
