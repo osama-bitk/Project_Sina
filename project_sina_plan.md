@@ -146,6 +146,10 @@ Final per-category for `sina-medium`: literal 100%, colloquial 90%, state-query 
 - Measure end-to-end latency: speech-end → tool-call extracted.
 - **Exit criteria:** You can speak to the Mac and see correct, validated tool calls appear in the terminal.
 
+**Result (2026-05-23): Phase 2 exit criteria met.** `mac/voice.py` records via PyAudio, transcribes with `faster-whisper` (base.en default), pipes the text into `brain.parse`. Two modes: interactive Enter-to-record/Enter-to-stop, and `--audio FILE` one-shot for file-based testing. End-to-end verified with `say "make it colder"` → `/tmp/sina-test.aiff` → `voice.py --audio` returning `{"tool":"set_temp","args":{"delta":-2}}`. Implementation note: chose Enter-toggle over spacebar push-to-talk to avoid pynput's macOS Accessibility-permission requirement; functionally equivalent for a CLI tool.
+
+Caveat: on a Mac Air with 8GB RAM, running Whisper-base.en and `sina-medium` concurrently produced 100–200s LLM latency per call (vs. ~5s headless benchmark). Ollama is repaging the model under memory pressure. Workaround: `--model sina-small --whisper tiny.en`. The dedicated Pi unit in Phase 5 won't share this constraint, though latency on Pi 5 will be its own story.
+
 ### Phase 3 — Hardware reconnaissance (ESP32 + IR receiver)
 
 **Goal:** Capture the exact IR protocol used by the LG AC remote.

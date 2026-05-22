@@ -6,9 +6,14 @@ See [`project_sina_plan.md`](./project_sina_plan.md) for the full plan, phasing,
 
 ## Status
 
-**Phase 1 complete. Starting Phase 2 (Mac voice input).**
+**Phase 2 complete. Voice → tool call works end-to-end on Mac.**
 
-Phase 1 picked `sina-medium` (qwen2.5:3b with strict system prompt) as the production tool-calling model. 83% accuracy on an 87-case benchmark. See [`mac/README.md`](./mac/README.md) and [`benchmarks/README.md`](./benchmarks/README.md) for details.
+- Phase 1: `sina-medium` (qwen2.5:3b) picked as production model, 83% on 87-case benchmark.
+- Phase 2: `mac/voice.py` records, transcribes via `faster-whisper`, pipes to `brain.parse`. Interactive Enter-to-record loop plus `--audio FILE` for testing.
+
+Next up: Phase 3 — ESP32 IR reconnaissance against the LG remote.
+
+See [`mac/README.md`](./mac/README.md), [`benchmarks/README.md`](./benchmarks/README.md), and [`project_sina_plan.md`](./project_sina_plan.md) for details.
 
 ## Repo layout
 

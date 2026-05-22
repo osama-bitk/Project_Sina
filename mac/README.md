@@ -44,13 +44,38 @@ python benchmark.py
 # -> writes ../benchmarks/results/results-<timestamp>.csv + prints summary
 ```
 
+## Voice (Phase 2)
+
+Setup (one-time):
+
+```sh
+brew install portaudio
+pip install -r requirements-voice.txt
+```
+
+First mic read will prompt macOS to grant the terminal mic access — allow it.
+
+```sh
+# Interactive: Enter to record, Enter to stop. Transcribes + parses + prints tool call.
+python voice.py
+
+# Quick smoke test from a file (no mic needed):
+say "make it colder" -o /tmp/sina-test.aiff
+python voice.py --audio /tmp/sina-test.aiff
+```
+
+Whisper model defaults to `base.en` (~150MB, downloaded on first run). Use `--whisper tiny.en` for a faster but less accurate alternative.
+
+**Mac memory note.** Running Whisper-base.en and `sina-medium` concurrently is RAM-heavy. On a Mac Air with 8GB, observed per-call LLM latency in voice mode is 100–200s (vs. ~5s median in the headless benchmark) — Ollama is being forced to repage the model. For lower latency at the cost of accuracy: `python voice.py --model sina-small --whisper tiny.en`. The Pi unit in Phase 5 will get its own dedicated memory and shouldn't see this issue.
+
 ## Files
 
 - `brain.py` — CLI agent: text in → validated tool call out. Pydantic discriminated union over the 6 tools; one corrective retry on malformed JSON before failing.
 - `benchmark.py` — runs both models against `../benchmarks/commands.jsonl`, writes timestamped CSV under `../benchmarks/results/`, prints per-category accuracy.
 - `modelfiles/sina-small.Modelfile`, `modelfiles/sina-medium.Modelfile` — Ollama config. Single source of truth for the system prompt (don't duplicate it in Python).
 - `requirements.txt` — Phase 1 essentials (`ollama`, `pydantic`).
-- `requirements-voice.txt` — Phase 2 voice deps (`faster-whisper`, `pyaudio`). Install only when starting Phase 2.
+- `voice.py` — Phase 2. Interactive Enter-to-talk loop (or `--audio FILE` for one-shot file transcription). Pipes Whisper output into `brain.parse`.
+- `requirements-voice.txt` — Phase 2 voice deps (`faster-whisper`, `pyaudio`). Needs `brew install portaudio` first on macOS.
 
 ## Tool schema
 
