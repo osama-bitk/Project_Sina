@@ -6,7 +6,9 @@ See [`project_sina_plan.md`](./project_sina_plan.md) for the full plan, phasing,
 
 ## Status
 
-**Pre-Phase 1.** Scaffolding only — no software written yet. Plan is set; next step is the Mac-hosted brain (`mac/`).
+**Phase 1 complete. Starting Phase 2 (Mac voice input).**
+
+Phase 1 picked `sina-medium` (qwen2.5:3b with strict system prompt) as the production tool-calling model. 83% accuracy on an 87-case benchmark. See [`mac/README.md`](./mac/README.md) and [`benchmarks/README.md`](./benchmarks/README.md) for details.
 
 ## Repo layout
 

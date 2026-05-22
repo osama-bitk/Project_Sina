@@ -119,6 +119,23 @@ Per-room unit:
 - Add a Pydantic validation layer for tool-call output. Malformed JSON triggers a single retry with a corrective prompt; second failure logs and aborts.
 - **Exit criteria:** Decision made on which model goes into production. Decision is data-driven (CSV in hand), not vibes.
 
+**Result (2026-05-22): production model is `sina-medium` (qwen2.5:3b).**
+
+87-case benchmark across literal / colloquial / ambiguous / state-query / off-topic / adversarial inputs. Three prompt iterations:
+
+| Iteration | Change | sina-small | sina-medium |
+|---|---|---:|---:|
+| 1 | Scope-framed prompt; "AC commands only, anything else → none" | 63% | 77% |
+| 2 | Added "relief direction" rule for delta sign (user is cold → warmer) | 82% | 83% |
+| 3 | Reordered as 3-step decision tree (query? → command? → none?) | 72% | **83%** |
+
+Final per-category for `sina-medium`: literal 100%, colloquial 90%, state-query 100%, off-topic 100%, ambiguous 60%, adversarial 10%. The 95% target wasn't met overall, but it was met on the four categories that matter for real interaction. The two failing categories are mostly degenerate cases:
+
+- **Adversarial.** Model insists on clamping out-of-range numeric values (`"set temp to 999"` → `temp_c: 30`) despite the prompt forbidding clamping. Helpfulness training overrides system prompt — likely a model-side ceiling, not a prompt-engineering one.
+- **Ambiguous.** Phrases like "the usual" / "back to normal" have no defined baseline. Probably belong in `none` but the model guesses.
+
+**Latency** (sina-medium, 87-case run): median 4.9s, p95 27.5s, mean 9.7s. Long tail driven by the retry-on-malformed-JSON path doubling inference cost. Not gated for Phase 1; will revisit in Phase 5 on Pi hardware.
+
 ### Phase 2 — Mac voice input
 
 **Goal:** Replace the keyboard with the Mac's microphone.
