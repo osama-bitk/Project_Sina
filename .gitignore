@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# macOS
+.DS_Store
+
+# Editor
+.vscode/
+.idea/
+*.swp
+
+# Arduino / PlatformIO
+.pio/
+.pioenvs/
+build/
+
+# Local artifacts
+*.log
+benchmarks/results/
+*.wav
