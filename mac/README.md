@@ -15,10 +15,16 @@ ollama pull qwen2.5:3b
 ollama create sina-small  -f modelfiles/sina-small.Modelfile
 ollama create sina-medium -f modelfiles/sina-medium.Modelfile
 
-# Python env
-python3 -m venv .venv && source .venv/bin/activate
+# Python env (Phase 1 deps: ollama + pydantic)
+python3 -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
+
+# Phase 2 voice deps later — needs `brew install portaudio` first:
+# pip install -r requirements-voice.txt
 ```
+
+If your shell mangles multi-line pastes, run each command on its own line.
 
 ## Usage
 
@@ -43,6 +49,8 @@ python benchmark.py
 - `brain.py` — CLI agent: text in → validated tool call out. Pydantic discriminated union over the 6 tools; one corrective retry on malformed JSON before failing.
 - `benchmark.py` — runs both models against `../benchmarks/commands.jsonl`, writes timestamped CSV under `../benchmarks/results/`, prints per-category accuracy.
 - `modelfiles/sina-small.Modelfile`, `modelfiles/sina-medium.Modelfile` — Ollama config. Single source of truth for the system prompt (don't duplicate it in Python).
+- `requirements.txt` — Phase 1 essentials (`ollama`, `pydantic`).
+- `requirements-voice.txt` — Phase 2 voice deps (`faster-whisper`, `pyaudio`). Install only when starting Phase 2.
 
 ## Tool schema
 
