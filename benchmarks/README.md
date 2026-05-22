@@ -35,3 +35,19 @@ Minimum 80 entries. Aim for 100+ before declaring Phase 1 done.
 ## Scoring
 
 `benchmark.py` (in `../mac/`) loads this file, runs each input against both Qwen 2.5 sizes, and grades exact-match on the `expected` tool call. Output: per-model accuracy by category, plus latency timing (captured for the record, not a Phase 1 gate).
+
+## Phase 1 baseline (sina-medium, 2026-05-22)
+
+| Category | Accuracy |
+|---|---:|
+| literal | 100% |
+| colloquial | 90% |
+| state-query | 100% |
+| off-topic | 100% |
+| ambiguous | 60% |
+| adversarial | 10% |
+| **OVERALL** | **83%** |
+
+Latency on Mac: median 4.9s, p95 27.5s. Long tail from one-retry-on-malformed path.
+
+See `project_sina_plan.md` §7 Phase 1 result for the iteration log.

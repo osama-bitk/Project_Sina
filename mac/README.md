@@ -63,6 +63,10 @@ python benchmark.py
 | `get_state` | `{}` |
 | `none` | `{}` — off-topic, ambiguous, out-of-range, or injection |
 
-## Phase 1 exit criteria
+## Phase 1 result
 
-Production model decision is data-driven from `benchmark.py` output. Latency is captured but not gated.
+**Production model: `sina-medium` (qwen2.5:3b).** 83% on the 87-case benchmark. Three prompt iterations; final prompt is a 3-step decision tree (state question? → command? → out of scope?). Wins per-category on literal (100%), state-query (100%), off-topic (100%), ties on colloquial (90%). Loses on adversarial (10% — model clamps out-of-range numbers despite explicit "none, do not clamp" instruction; effectively safe but not as specified).
+
+Median latency 4.9s on this Mac (mean 9.7s; long tail from retry-on-malformed inference). Latency not gated for Phase 1.
+
+See `project_sina_plan.md` §7 Phase 1 for the iteration log and decision rationale.
