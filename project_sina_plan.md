@@ -67,7 +67,7 @@ Per room:
 | Layer | Phase A (Mac) | Phase B (Edge) | Notes |
 |---|---|---|---|
 | Inference runtime | Ollama (native macOS) | Ollama or llama.cpp | llama.cpp may be preferred on Pi for raw speed |
-| SLM | Qwen 2.5 (1.5B vs 3B, benchmarked) | Same model chosen in Phase A | Re-benchmark on Pi — performance characteristics differ |
+| SLM | Qwen3 (1.7B for Mac dev, 4B production — benchmarked 2026-07-04) | qwen3:4b Q4 | Re-benchmark on Pi — performance characteristics differ. Run with thinking disabled |
 | Speech-to-text | `faster-whisper` or `whisper.cpp` (tiny/base) | `whisper.cpp` (tiny) | Pi requires the smallest viable model |
 | Wake word | Manual trigger (push-to-talk) initially | ESP-SR/WakeNet **on the node** | Custom "Sina" word needs Espressif's training pipeline — real risk, spike early (Phase 4.5). Avoid Picovoice (cloud licensing) |
 | Agent middleware | Python 3.11+ (`ollama`, `pydantic`, `requests`, `pyaudio`) | Same | Pydantic non-negotiable for tool-call validation |
@@ -139,6 +139,21 @@ Final per-category for `sina-medium`: literal 100%, colloquial 90%, state-query 
 - **Ambiguous.** Phrases like "the usual" / "back to normal" have no defined baseline. **Resolved (2026-07-03):** added a `set_preset` tool backed by a per-room `default_preset` in `mac/config.json` — these phrases now map to a real, useful command. This is config, not tracked state, so the stateless design holds.
 
 **Also changed 2026-07-03:** `brain.py` now passes the full Pydantic JSON schema as Ollama's `format` (structured outputs) instead of `format="json"`, constraining generation to the schema. This should eliminate most malformed-output retries — the driver of the p95 latency tail (27.5s). Re-benchmark before Phase 5.
+
+**Model re-evaluation (2026-07-04): production model is now `sina-medium-v2` (qwen3:4b).**
+
+The 2026-07-03 benchmark showed structured outputs cut latency dramatically (median 9.7s→3.9s, p95 27.5s→5.2s, zero malformed outputs) but regressed off-topic refusal (sina-medium 100%→83%, sina-small 100%→0%): grammar-constrained decoding forces the model to emit *some* schema-valid tool call, overriding prompt-driven refusal when the model's raw distribution doesn't rank `none` on top. Reordering the schema union didn't help — it's a model-capability issue, so qwen3 was benchmarked with the identical prompt (`sina-*-v2` Modelfiles):
+
+| Model | Overall | literal | colloq. | ambig. | state-q | off-topic | advers. | median lat.* |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| sina-small (qwen2.5:1.5b) | 69% | 92% | 86% | 91% | 100% | **0%** | 10% | 2.3s |
+| sina-medium (qwen2.5:3b) | 85% | 96% | 90% | 82% | 100% | 83% | 40% | 3.9s |
+| sina-small-v2 (qwen3:1.7b) | 81% | 88% | 71% | 73% | 100% | 92% | 60% | 3.4s |
+| **sina-medium-v2 (qwen3:4b)** | **93%** | 96% | **100%** | **100%** | 100% | **100%** | 50% | 12.6s |
+
+\* on the 2019 Intel Mac Air (CPU-only inference; this machine is not the latency reference — Pi 5 re-benchmark in Phase 5 decides).
+
+`sina-medium-v2` is the first model to meet the §3 objective (≥95% on all four core categories; its one literal miss, "AC on" → `get_state`, is a genuinely ambiguous utterance). Remaining adversarial failures are non-numeric substitutions ("set fan to ludicrous" → `low`) — wrong-but-benign values; the clamp guard catches all numeric cases. Caveats: (a) qwen3 is a thinking model — ~700 hidden reasoning tokens per call unless disabled; `brain.py` passes `think=False` (with fallback for older models) and the v2 Modelfiles carry `/no_think`; (b) 4B at 12.6s median on the Intel Mac is too slow for interactive Mac use — `sina-small-v2` (81%, 3.4s, off-topic 92%) is the Mac dev default; the 4B is the Pi-brain target pending Phase 5 latency numbers.
 
 **Latency** (sina-medium, 87-case run): median 4.9s, p95 27.5s, mean 9.7s. Long tail driven by the retry-on-malformed-JSON path doubling inference cost. Not gated for Phase 1; will revisit in Phase 5 on Pi hardware.
 

@@ -17,7 +17,7 @@ REPO = Path(__file__).resolve().parent.parent
 DATASET = REPO / "benchmarks" / "commands.jsonl"
 OUTPUT_DIR = REPO / "benchmarks" / "results"
 
-MODELS = ["sina-small", "sina-medium"]
+MODELS = ["sina-small-v2", "sina-medium-v2"]
 
 
 def _matches(expected, actual) -> bool:
@@ -112,4 +112,4 @@ def _summary(rows: list[dict]) -> None:
 
 
 if __name__ == "__main__":
-    run()
+    run(models=sys.argv[1:] or MODELS)

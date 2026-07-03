@@ -13,7 +13,10 @@ Local, offline, voice-controlled AC agent. Mac-hosted brain now (Phase A); end s
 
 ## Conventions
 
-- The system prompt lives **only** in `mac/modelfiles/*.Modelfile` — never duplicate it in Python. After editing a Modelfile, rebuild: `ollama create sina-medium -f mac/modelfiles/sina-medium.Modelfile`.
+- Production model: `sina-medium-v2` (qwen3:4b, Pi-brain target); Mac interactive default: `sina-small-v2` (qwen3:1.7b). The qwen2.5-based `sina-small`/`sina-medium` are superseded (kept for comparison).
+- The system prompt lives **only** in `mac/modelfiles/*.Modelfile` — never duplicate it in Python. After editing a Modelfile, rebuild: `ollama create sina-medium-v2 -f mac/modelfiles/sina-medium-v2.Modelfile`.
+- Thinking models (qwen3+) must run with thinking disabled or every call burns ~700 hidden reasoning tokens (~60s on CPU): `brain.py` passes `think=False` (with cached fallback for models that reject it) and the v2 Modelfiles end the system prompt with `/no_think`.
+- Grammar-constrained decoding (structured outputs) can override prompt-driven refusal — a weak model gets forced into a plausible-but-wrong tool call instead of `none`. If refusal categories regress after a decoding change, suspect the model, not the prompt (see plan §7, 2026-07-04 re-evaluation).
 - Tool schema is defined once, in `mac/brain.py` (Pydantic discriminated union, `extra="forbid"`). Ollama generation is constrained to this schema via structured outputs. New tools: add the Pydantic model + union member, the Modelfile prompt rule, and benchmark cases — all three.
 - `mac/benchmark.py` is the regression suite. Run it after every prompt, schema, or model change. Results CSVs go to `benchmarks/results/` (gitignored).
 - Benchmark cases live in `benchmarks/commands.jsonl`; `expected: null` means the case must resolve to `none`.

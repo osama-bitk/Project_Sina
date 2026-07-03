@@ -10,9 +10,9 @@ See [`project_sina_plan.md`](./project_sina_plan.md) for the full plan, phasing,
 
 **Phase 3 in progress: IR reconnaissance against the LG remote.**
 
-- Phase 1: `sina-medium` (qwen2.5:3b) picked as production model, 83% on the benchmark (100% literal/state-query/off-topic, 90% colloquial).
+- Phase 1: benchmark harness + prompt built on qwen2.5. **Re-evaluated 2026-07-04: production model is `sina-medium-v2` (qwen3:4b)** — 93% overall, ≥96% on all four core categories, the first model to meet the plan §3 objective. `sina-small-v2` (qwen3:1.7b, 81%, ~3.4s/call) is the Mac interactive default; the 4B is the Pi-brain target.
 - Phase 2: `mac/voice.py` records, transcribes via `faster-whisper`, pipes to `brain.parse`.
-- 2026-07-03 hardening: structured outputs (schema-constrained generation), out-of-range clamp guard, `set_preset` tool backed by `mac/config.json`.
+- 2026-07-03 hardening: structured outputs (schema-constrained generation), out-of-range clamp guard, `set_preset` tool backed by `mac/config.json`, `think=False` for qwen3 (hidden reasoning tokens otherwise cost ~60s/call).
 - Phase 3: ESP32 decoder sketch + capture procedure ready in [`esp32/README.md`](./esp32/README.md). Awaiting captured codes in `ir_codes/lg_ac.json`.
 
 ## Repo layout
@@ -31,10 +31,10 @@ See [`project_sina_plan.md`](./project_sina_plan.md) for the full plan, phasing,
 
 ```sh
 # Base models + Sina variants (system prompt + temperature=0 baked in)
-ollama pull qwen2.5:1.5b
-ollama pull qwen2.5:3b
-ollama create sina-small  -f mac/modelfiles/sina-small.Modelfile
-ollama create sina-medium -f mac/modelfiles/sina-medium.Modelfile
+ollama pull qwen3:1.7b
+ollama pull qwen3:4b
+ollama create sina-small-v2  -f mac/modelfiles/sina-small-v2.Modelfile
+ollama create sina-medium-v2 -f mac/modelfiles/sina-medium-v2.Modelfile
 
 # Python env
 cd mac
@@ -51,8 +51,8 @@ pip install -r requirements-voice.txt
 ```sh
 cd mac
 
-# Text in, validated tool call out (dry run)
-python brain.py --model sina-medium "make it colder"
+# Text in, validated tool call out (dry run; default model sina-small-v2)
+python brain.py "make it colder"
 # -> {"tool": "set_temp", "args": {"delta": -2}}
 
 # Voice: Enter to record, Enter to stop
@@ -64,7 +64,7 @@ say "make it colder" -o /tmp/sina-test.aiff && python voice.py --audio /tmp/sina
 python benchmark.py
 ```
 
-**8GB Mac note:** Whisper-base.en + sina-medium concurrently forces Ollama to repage (100–200s/call). Use `python voice.py --model sina-small --whisper tiny.en` if RAM-constrained.
+**8GB Mac note:** this Intel Air runs all inference on CPU; the 4B production model is ~12s/call here, so interactive/voice use defaults to `sina-small-v2`. Whisper + LLM concurrently is RAM-tight — use `--whisper tiny.en` if latency balloons.
 
 ## Tool schema
 

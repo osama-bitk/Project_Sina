@@ -95,14 +95,21 @@ class BrainError(Exception):
     pass
 
 
+# Thinking models (qwen3+) burn hundreds of hidden reasoning tokens per call
+# unless told not to; older models reject the think parameter entirely.
+_supports_no_think: dict = {}
+
+
 def _ollama_chat(model: str, messages: list[dict]) -> str:
-    resp = ollama.chat(
-        model=model,
-        messages=messages,
-        format=_schema,
-        options={"temperature": 0},
-    )
-    return resp["message"]["content"]
+    kwargs = dict(model=model, messages=messages, format=_schema, options={"temperature": 0})
+    if _supports_no_think.get(model, True):
+        try:
+            resp = ollama.chat(think=False, **kwargs)
+            _supports_no_think[model] = True
+            return resp["message"]["content"]
+        except ollama.ResponseError:
+            _supports_no_think[model] = False
+    return ollama.chat(**kwargs)["message"]["content"]
 
 
 def _validate(raw: str) -> dict:
@@ -149,7 +156,7 @@ def parse(model: str, user_input: str) -> dict:
 
 def main() -> None:
     p = argparse.ArgumentParser(description="Sina brain — dry-run tool-call parser")
-    p.add_argument("--model", default="sina-small", help="Ollama model tag (default: sina-small)")
+    p.add_argument("--model", default="sina-small-v2", help="Ollama model tag (default: sina-small-v2)")
     p.add_argument("input", nargs="*", help="User input; if omitted, reads stdin")
     args = p.parse_args()
 

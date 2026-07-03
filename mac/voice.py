@@ -95,7 +95,7 @@ def process(text: str, model: str, stt_ms: int) -> None:
 
 def main() -> None:
     p = argparse.ArgumentParser(description="Sina voice → validated tool call")
-    p.add_argument("--model", default="sina-medium", help="Ollama model tag")
+    p.add_argument("--model", default="sina-small-v2", help="Ollama model tag")
     p.add_argument("--whisper", default="base.en", help="faster-whisper model")
     p.add_argument("--audio", type=Path, help="Transcribe this file and exit (skip live mode)")
     args = p.parse_args()
