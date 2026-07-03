@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from typing import Annotated, Literal, Optional, Union
 
@@ -72,16 +73,22 @@ class _GetState(_Strict):
     args: _EmptyArgs = _EmptyArgs()
 
 
+class _SetPreset(_Strict):
+    tool: Literal["set_preset"]
+    args: _EmptyArgs = _EmptyArgs()
+
+
 class _NoTool(_Strict):
     tool: Literal["none"]
     args: _EmptyArgs = _EmptyArgs()
 
 
 ToolCall = Annotated[
-    Union[_SetPower, _SetTemp, _SetFan, _SetMode, _GetState, _NoTool],
+    Union[_SetPower, _SetTemp, _SetFan, _SetMode, _GetState, _SetPreset, _NoTool],
     Field(discriminator="tool"),
 ]
 _adapter: TypeAdapter = TypeAdapter(ToolCall)
+_schema: dict = _adapter.json_schema()
 
 
 class BrainError(Exception):
@@ -92,7 +99,7 @@ def _ollama_chat(model: str, messages: list[dict]) -> str:
     resp = ollama.chat(
         model=model,
         messages=messages,
-        format="json",
+        format=_schema,
         options={"temperature": 0},
     )
     return resp["message"]["content"]
@@ -103,6 +110,22 @@ def _validate(raw: str) -> dict:
     return _adapter.validate_python(data).model_dump(exclude_none=True)
 
 
+_NUM_RE = re.compile(r"-?\d+")
+
+
+def _clamp_guard(user_input: str, call: dict) -> dict:
+    """Models clamp out-of-range temps to a boundary despite the prompt.
+
+    If the call is an absolute set_temp at a range boundary and every number
+    the user actually said is outside 16..30, treat it as out of scope.
+    """
+    if call.get("tool") == "set_temp" and call["args"].get("temp_c") in (16, 30):
+        nums = [int(n) for n in _NUM_RE.findall(user_input)]
+        if nums and all(not 16 <= n <= 30 for n in nums):
+            return {"tool": "none", "args": {}}
+    return call
+
+
 def parse(model: str, user_input: str) -> dict:
     """Return validated tool call as a plain dict. One retry on malformed output, then BrainError."""
     messages: list[dict] = [{"role": "user", "content": user_input}]
@@ -110,19 +133,16 @@ def parse(model: str, user_input: str) -> dict:
 
     try:
         raw = _ollama_chat(model, messages)
-        return _validate(raw)
-    except (json.JSONDecodeError, ValidationError) as first_err:
+        return _clamp_guard(user_input, _validate(raw))
+    except (json.JSONDecodeError, ValidationError):
         messages.append({"role": "assistant", "content": raw})
         messages.append({
             "role": "user",
-            "content": (
-                f"Your previous response was invalid: {first_err}. "
-                "Reply with one valid JSON tool call matching the schema. No prose."
-            ),
+            "content": "Invalid. Reply with one valid JSON tool call. No prose.",
         })
         try:
             raw = _ollama_chat(model, messages)
-            return _validate(raw)
+            return _clamp_guard(user_input, _validate(raw))
         except (json.JSONDecodeError, ValidationError) as second_err:
             raise BrainError(f"invalid tool call after retry: {second_err}") from second_err
 

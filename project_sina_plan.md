@@ -24,7 +24,7 @@ The end state is a **plug-and-play unit**: a small box with a microphone, a micr
 
 ## 3. Technical Objectives
 
-- **Tool-calling accuracy ≥ 95%** on a defined benchmark set of natural-language AC commands.
+- **Tool-calling accuracy ≥ 95%** on the four categories that matter for real interaction (literal, colloquial, state-query, off-topic). Ambiguous and adversarial inputs must **fail safe** — resolve to `none` rather than fire a wrong IR command; they are not held to the 95% bar. (Revised 2026-07-03: the original blanket 95% target penalized categories whose correct behavior is refusal.)
 - **End-to-end latency ≤ 2 seconds** from end-of-speech to IR emission for the Mac-hosted phase. ≤ 3 seconds for the Pi-hosted edge phase.
 - **CPU thermal headroom.** No sustained 100% CPU. Model size and context window tuned to keep the host stable.
 - **Zero internet calls at runtime.** Verified by running the system with Wi-Fi disabled (after initial setup downloads).
@@ -131,8 +131,10 @@ Per-room unit:
 
 Final per-category for `sina-medium`: literal 100%, colloquial 90%, state-query 100%, off-topic 100%, ambiguous 60%, adversarial 10%. The 95% target wasn't met overall, but it was met on the four categories that matter for real interaction. The two failing categories are mostly degenerate cases:
 
-- **Adversarial.** Model insists on clamping out-of-range numeric values (`"set temp to 999"` → `temp_c: 30`) despite the prompt forbidding clamping. Helpfulness training overrides system prompt — likely a model-side ceiling, not a prompt-engineering one.
-- **Ambiguous.** Phrases like "the usual" / "back to normal" have no defined baseline. Probably belong in `none` but the model guesses.
+- **Adversarial.** Model insists on clamping out-of-range numeric values (`"set temp to 999"` → `temp_c: 30`) despite the prompt forbidding clamping. Helpfulness training overrides system prompt — likely a model-side ceiling, not a prompt-engineering one. **Mitigated in code (2026-07-03):** `brain.py` now post-checks boundary `temp_c` values against the numbers in the utterance and downgrades clamped calls to `none`.
+- **Ambiguous.** Phrases like "the usual" / "back to normal" have no defined baseline. **Resolved (2026-07-03):** added a `set_preset` tool backed by a per-room `default_preset` in `mac/config.json` — these phrases now map to a real, useful command. This is config, not tracked state, so the stateless design holds.
+
+**Also changed 2026-07-03:** `brain.py` now passes the full Pydantic JSON schema as Ollama's `format` (structured outputs) instead of `format="json"`, constraining generation to the schema. This should eliminate most malformed-output retries — the driver of the p95 latency tail (27.5s). Re-benchmark before Phase 5.
 
 **Latency** (sina-medium, 87-case run): median 4.9s, p95 27.5s, mean 9.7s. Long tail driven by the retry-on-malformed-JSON path doubling inference cost. Not gated for Phase 1; will revisit in Phase 5 on Pi hardware.
 
@@ -171,6 +173,7 @@ Caveat: on a Mac Air with 8GB RAM, running Whisper-base.en and `sina-medium` con
   - Connects to home Wi-Fi on a static IP.
   - Hosts a tiny async HTTP server.
   - Exposes endpoints like `GET /ac?state=on&temp=22&fan=auto`.
+  - Requires a shared static token (`X-Sina-Token` header) on every request. ~5 lines of firmware; stops a misbehaving IoT device or guest on the LAN from cycling the AC. Token lives in config, not in the repo.
   - On request, fires the matching IR code from the captured codebook.
 - Test from the Mac with `curl`. Confirm the AC physically responds.
 - Update `brain.py` to send HTTP requests to the ESP32 instead of printing dry-run logs.
@@ -181,9 +184,9 @@ Caveat: on a Mac Air with 8GB RAM, running Whisper-base.en and `sina-medium` con
 **Goal:** Replace the Mac + ESP32 split with a single self-contained Pi unit.
 
 - Provision a Raspberry Pi 5 with Raspberry Pi OS Lite (64-bit).
-- Install Ollama on the Pi. Re-pull the chosen model.
+- **Default to `llama.cpp` with a Q4 quant of the chosen model** (not Ollama) — expect ~5–8 tok/s for qwen2.5:3b on Pi 5; a short tool-call output lands in ~2–4s, but there's no headroom for repaging. If Ollama is used, set `OLLAMA_KEEP_ALIVE=-1` so the model stays resident — the Mac Air memory-pressure incident (100–200s latencies) is the failure mode to avoid.
 - Re-run the Phase 1 benchmark on the Pi to verify accuracy and measure new latency.
-- Install `faster-whisper` or `whisper.cpp` on the Pi.
+- Install `whisper.cpp` with `tiny.en` on the Pi (upgrade to `base.en` only if accuracy demands it and latency allows).
 - Wire the IR emitter module directly to Pi GPIO (3 jumper wires, no solder).
 - Port the IR transmission logic from Arduino C++ to Python using `pigpio` (which supports precise microsecond-level pulse timing required for IR).
 - Port `brain.py` to run on the Pi with the same tool schema, but now executing GPIO calls instead of HTTP requests.
@@ -199,6 +202,15 @@ Caveat: on a Mac Air with 8GB RAM, running Whisper-base.en and `sina-medium` con
 - Add an LED indicator (one more jumper wire) showing listening state.
 - **Exit criteria:** Saying "Sina, set the bedroom to 22" anywhere in the room triggers the AC, with no button presses.
 
+### Phase 6.5 — Voice feedback (TTS)
+
+**Goal:** Close the interaction loop — the unit confirms what it did.
+
+- Integrate [Piper](https://github.com/rhasspy/piper) (fully offline TTS, runs comfortably on Pi 5).
+- Speak short confirmations: "set to 22", "AC off", "sorry, I didn't get that".
+- `get_state` responses become spoken ("I don't know the current state" until/unless two-way IR exists).
+- **Exit criteria:** Every accepted command gets a spoken confirmation; every rejection gets a spoken error, all offline.
+
 ### Phase 7 — Multi-room replication
 
 **Goal:** Clone the unit. Drop it in another room.
@@ -210,14 +222,23 @@ Caveat: on a Mac Air with 8GB RAM, running Whisper-base.en and `sina-medium` con
 - Verify second unit works standalone.
 - **Exit criteria:** Two independent rooms, each with its own self-contained Sina unit.
 
-### Phase 8 (optional, future) — Whole-home commands
+### Phase 8 (optional, future) — Whole-home commands & the No-Internet-Home platform
 
-**Goal:** Let units talk to each other for cross-room actions.
+**Goal:** Let units talk to each other for cross-room actions, and lay the LAN foundation that future offline-home projects (lighting, TV, sensors) plug into instead of reinventing.
 
-- Add lightweight LAN discovery (mDNS / Zeroconf).
-- Add an inter-unit RPC protocol over local network.
-- Add a "broadcast" tool to the SLM schema ("turn off all ACs").
-- **Exit criteria:** Saying "Sina, turn everything off" from any room kills every AC in the house.
+**8a — Whole-home AC commands (the original scope):**
+
+- Lightweight LAN discovery via mDNS/Zeroconf (`_sina._tcp.local`, each unit advertises room name + capabilities).
+- Inter-unit RPC over the LAN: same HTTP+token pattern as Phase 4, peer-to-peer — **no master unit, no broker**. Any unit can broadcast; every unit remains fully standalone if the network is down.
+- Add a `broadcast` tool to the SLM schema ("turn off all ACs").
+- **Exit criteria:** Saying "Sina, turn everything off" from any room kills every AC in the house; unplugging any unit changes nothing for the others.
+
+**8b — Scalability groundwork (design now, build later):**
+
+- **Capability manifest.** Each unit's mDNS advertisement lists what it can do (`ac.set_temp`, `ac.set_power`, …). A future lighting or TV node advertises its own verbs. The voice unit's tool schema is generated from discovered capabilities, not hardcoded.
+- **One wire protocol.** All device nodes speak the same authenticated HTTP+JSON command shape as the Phase 4 ESP32. New appliance = new node implementing the same contract; the brain doesn't change.
+- **Room addressing.** Commands carry a room scope (`bedroom`, `all`), resolved against the mDNS registry — this is what makes "turn off the living room AC" from the bedroom possible.
+- Follow-on projects (explicitly out of scope for Sina, but designed-for): IR lighting/TV nodes, 433MHz RF sockets, local sensor nodes (temp/humidity feeding smarter presets).
 
 ---
 
@@ -280,4 +301,15 @@ The project is "done" (Phase 7 complete) when:
 - **Whisper model size on the Pi:** `tiny.en` is fast but error-prone; `base.en` is more accurate but may push latency past 3s. Benchmark in Phase 5.
 - **GPIO IR encoding library:** `pigpio` is the standard but the API is finicky. Worth a small spike before committing.
 - **Wake word training:** Custom "Sina" wake word requires recording ~100 samples. Plan a focused recording session in Phase 6.
-- **Multi-unit sync (Phase 8):** mDNS vs. a tiny MQTT broker on one designated "master" unit. Decide later when we actually need it.
+- ~~Multi-unit sync (Phase 8): mDNS vs. MQTT broker on a master unit.~~ **Decided 2026-07-03: mDNS + peer-to-peer HTTP.** A broker creates a master unit, which violates the no-cross-room-dependency principle. See Phase 8.
+- **`get_state`:** LG ACs almost universally have no two-way IR. Working assumption: `get_state` returns "unknown" permanently (Phase 6.5 speaks it). Keep the tool — it correctly absorbs state questions that would otherwise misroute — but don't build anything expecting real state.
+
+---
+
+## 13. Next Steps (as of 2026-07-03)
+
+1. **Rebuild the Ollama models** (`ollama create sina-small/-medium -f ...`) — the Modelfiles gained the `set_preset` tool.
+2. **Re-run the benchmark** (88 cases now) to measure the effect of structured outputs + clamp guard + `set_preset` on accuracy and the latency tail. Expect ambiguous and adversarial to jump.
+3. **Phase 3 capture session:** wire the VS1838B, flash `esp32/ir_decoder/`, capture the LG remote into `ir_codes/lg_ac.json`. This is the critical path.
+4. **Phase 4:** ESP32 IR server sketch with token auth; point `brain.py` at it.
+5. Re-run the benchmark as a regression gate after **every** prompt or model change — it's a one-liner (`python benchmark.py`), treat it like a test suite.

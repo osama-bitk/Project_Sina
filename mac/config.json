@@ -1,0 +1,9 @@
+{
+  "room": "bedroom",
+  "default_preset": {
+    "power": true,
+    "temp_c": 22,
+    "mode": "cool",
+    "fan": "auto"
+  }
+}

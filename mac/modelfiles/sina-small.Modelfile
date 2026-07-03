@@ -74,6 +74,11 @@ OTHER TOOLS
 - set_power: {"on": true | false}
 - set_fan:   {"speed": "auto" | "low" | "med" | "high"}
 - set_mode:  {"mode": "cool" | "heat" | "dry" | "fan"}
+- set_preset: {} — restore the room's saved default settings.
+  Triggers: "the usual", "back to normal", "normal settings", "default",
+  "usual settings", "reset it".
+  "the usual"       → {"tool":"set_preset","args":{}}
+  "back to normal"  → {"tool":"set_preset","args":{}}
 
 STEP 3 — IS THE REQUEST OUT OF SCOPE?
 
