@@ -1,6 +1,6 @@
 # ESP32 firmware (Phase 3–4)
 
-Two Arduino sketches. The ESP32 is throwaway hardware — once Phase 5 lands and the Pi drives IR directly, this directory is dead code (kept for reference).
+Two Arduino sketches. The board is an **ESP32-S3 N16R8** — not throwaway: after recon it becomes room node #1 (mic + wake word + IR emitter) in the central-brain architecture (plan §4, revised 2026-07-04). Phase 6 replaces these sketches with the node voice-satellite firmware.
 
 | Dir | Phase | Purpose |
 |---|---|---|

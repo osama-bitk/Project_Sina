@@ -34,32 +34,31 @@ The end state is a **plug-and-play unit**: a small box with a microphone, a micr
 
 ## 4. System Architecture
 
-The project goes through **two distinct architectural phases**, each a complete working system in its own right.
+**Revised 2026-07-04.** The original plan had two phases: Mac-hosted development, then a fully self-contained Pi per room. The end state is now **one central Pi brain + cheap per-room satellite nodes** — the per-room-Pi model didn't survive the cost math ($150/room vs ~$15–20/room for a node).
 
-### Phase A — Centralized (Mac-hosted)
+### Phase A — Centralized development (Mac-hosted)
 
 ```
 [Mic] → [Whisper on Mac] → [Ollama+SLM on Mac] → [Python brain.py] → [Wi-Fi HTTP] → [ESP32 + IR LED] → [AC]
 ```
 
-- One Mac, many ESP32 IR nodes (one per room).
-- Mac does all the heavy lifting (ASR + SLM inference).
-- ESP32s are dumb HTTP endpoints that fire IR codes on request.
+- The Mac stands in for the eventual Pi brain. ESP32s are dumb HTTP endpoints that fire IR codes on request.
 - This phase exists to validate the software stack before committing to edge hardware.
 
-### Phase B — Distributed Edge (Pi-hosted, the end goal)
+### Phase B — Central brain + satellite nodes (the end goal)
 
 ```
-Per-room unit:
-[Mic] → [Whisper on Pi] → [Ollama+SLM on Pi] → [Python agent] → [GPIO/IR LED] → [AC]
+Per room:
+  [Mic] → [ESP32-S3 node: on-device wake word] → streams post-wake audio over LAN
+       → [Pi 5: Whisper → SLM → validation gate] → command back over LAN
+       → [ESP32-S3 fires IR] → [AC]
 ```
 
-- One self-contained device per room. No central server.
-- Raspberry Pi 5 (8GB) per unit, running the full stack locally.
-- No cross-room dependencies. Each unit can be unplugged and moved without breaking the others.
-- Optional: units can discover each other on the LAN for whole-home commands ("turn off all ACs"), but each unit functions standalone.
-
-**Why this split exists:** Phase A lets us iterate the software stack on a much faster machine (the Mac) before re-deploying to constrained edge hardware. Phase B is the actual product.
+- **One Raspberry Pi 5 (8GB) is the brain** for the whole house: Whisper (STT), the SLM, the deterministic validation gate, and the node command router. Both models stay resident (load-on-demand costs 1–3s per cold command; only add eviction if memory pressure is measured).
+- **Each room gets an ESP32-S3 node** (~$15–20): I2S mic, on-device wake word, IR emitter. No inference on the node. The Phase 3 recon board becomes room node #1 — no throwaway hardware.
+- **Privacy invariant: only post-wake-word audio ever leaves the room.** Nodes never stream continuously.
+- **Node ↔ Pi protocol:** don't invent one. The ESPHome voice-satellite firmware / Wyoming protocol (Rhasspy ecosystem) solve exactly this shape (S3 + INMP441 streaming post-wake audio to a Linux brain), offline-friendly. Even with custom firmware, adopt the Wyoming protocol. Discovery: static IPs + a config map first, mDNS later. Each node's config carries its room identity so commands route to the right AC.
+- **Accepted tradeoffs:** Pi or Wi-Fi down = whole house down; simultaneous commands from different rooms queue (~5s each). Both acceptable at household scale. Nodes stay dumb and stateless, so a "promote a node to standalone unit" path remains open if the single point of failure ever bites.
 
 ---
 
@@ -70,38 +69,43 @@ Per-room unit:
 | Inference runtime | Ollama (native macOS) | Ollama or llama.cpp | llama.cpp may be preferred on Pi for raw speed |
 | SLM | Qwen 2.5 (1.5B vs 3B, benchmarked) | Same model chosen in Phase A | Re-benchmark on Pi — performance characteristics differ |
 | Speech-to-text | `faster-whisper` or `whisper.cpp` (tiny/base) | `whisper.cpp` (tiny) | Pi requires the smallest viable model |
-| Wake word | Manual trigger (push-to-talk) initially → `openWakeWord` | `openWakeWord` | Avoid Picovoice (cloud licensing) |
+| Wake word | Manual trigger (push-to-talk) initially | ESP-SR/WakeNet **on the node** | Custom "Sina" word needs Espressif's training pipeline — real risk, spike early (Phase 4.5). Avoid Picovoice (cloud licensing) |
 | Agent middleware | Python 3.11+ (`ollama`, `pydantic`, `requests`, `pyaudio`) | Same | Pydantic non-negotiable for tool-call validation |
-| Microcontroller | ESP32 dev board (no soldering — pre-pinned) | Replaced by Pi GPIO | ESP32 phase is throwaway hardware once Pi handles IR directly |
+| Microcontroller | ESP32-S3 N16R8 dev board (no soldering — pre-pinned) | Same board = the room node | 8MB PSRAM (R8) required for on-device wake word; recon board becomes node #1 |
+| Node mic | — | INMP441 I2S MEMS (~$3) | Jumper-wired to the S3 |
+| Node firmware | Arduino sketch (dumb HTTP endpoint) | ESPHome voice satellite or custom + Wyoming protocol | Don't invent an audio protocol |
 | IR receiver (recon) | VS1838B module | — | Used once to capture LG codes |
 | IR emitter | IR transmitter module with built-in driver transistor | Same module, wired to Pi GPIO | Pre-built module to avoid soldering a driver circuit |
 | IR library | `IRremoteESP8266` (works on ESP32) | `pigpio` + custom IR encoder, or `lirc` | Pi side requires more legwork than ESP32 |
-| Edge host | — | Raspberry Pi 5, 8GB RAM, active cooling | Pi 4 not recommended; Pi 5 NEON SIMD is the unlock |
+| Edge host | — | **One** Raspberry Pi 5, 8GB, active cooling — per home, not per room | Pi 4 not recommended; Pi 5 NEON SIMD is the unlock |
 | OS (Pi) | — | Raspberry Pi OS Lite (64-bit) | Headless, minimal footprint |
 | Power | Standard USB-C charger | USB-C PD charger for Pi | Pi 5 needs the official 27W PSU for stability under load |
 
 ---
 
-## 6. Bill of Materials (per room, Phase B)
+## 6. Bill of Materials (Phase B — revised 2026-07-04)
+
+**Central brain (one per home):**
 
 | Item | Approx. cost (USD) | Notes |
 |---|---|---|
 | Raspberry Pi 5 (8GB) | $80 | The minimum viable spec; 4GB is not enough |
 | Official Pi 5 PSU (27W USB-C) | $12 | Don't skimp — voltage drops cause SLM crashes |
-| MicroSD 64GB (A2 rated) | $12 | Or NVMe HAT if you want longevity |
+| MicroSD 64GB (A2 rated) | $12 | Or NVMe HAT for longevity |
 | Active cooler for Pi 5 | $10 | Mandatory under sustained inference load |
-| USB microphone (e.g. MiniDSP UMA-8 or any decent USB mic) | $15-30 | Quality directly impacts Whisper accuracy |
-| IR transmitter module (with driver) | $3 | Pre-built breakout board |
-| Jumper wires + breadboard | $5 | One-time purchase, supplies multiple units |
 | Pi case with cooler cutout | $10 | Cosmetic but useful |
-| **Per-unit total** | **~$150** | Vs. $200+/yr for cloud-locked alternatives |
+| **Brain total** | **~$125** | Once, not per room |
 
-**Phase A prototyping additions (one-time):**
+**Per-room node:**
 
-| Item | Approx. cost (USD) |
-|---|---|
-| ESP32 dev board (with pre-soldered headers) | $8 |
-| VS1838B IR receiver module | $1 |
+| Item | Approx. cost (USD) | Notes |
+|---|---|---|
+| ESP32-S3 **N16R8** dev board | $10 | 8MB PSRAM required for on-device wake word. **Check antenna variant before buying** (see §12) |
+| INMP441 I2S MEMS mic | $3 | Jumper-wired, no solder |
+| IR transmitter module (with driver transistor) | $3 | Not a bare KY-005 — driver matters for range |
+| **Per-node total** | **~$16** | Vs. ~$150/room in the old per-room-Pi model |
+
+**One-time prototyping:** VS1838B IR receiver ($1, recon only — not in the final node), breadboard + jumper wires (~$6), USB-C **data** cable ($3). See `hardware.md` for the shopping list.
 
 ---
 
@@ -179,48 +183,55 @@ Caveat: on a Mac Air with 8GB RAM, running Whisper-base.en and `sina-medium` con
 - Update `brain.py` to send HTTP requests to the ESP32 instead of printing dry-run logs.
 - **Exit criteria:** End-to-end speech → AC control working through the Mac + ESP32 stack.
 
-### Phase 5 — Edge migration (Raspberry Pi as full unit)
+### Phase 4.5 — Wake-word spike (de-risk before buying more nodes)
 
-**Goal:** Replace the Mac + ESP32 split with a single self-contained Pi unit.
+**Goal:** Prove (or disprove) on-device wake word on the ESP32-S3 before committing to five of them.
 
-- Provision a Raspberry Pi 5 with Raspberry Pi OS Lite (64-bit).
+- Flash the ESPHome voice-satellite firmware (or a minimal ESP-SR sketch) on the recon S3 + INMP441.
+- Test a stock WakeNet wake word first; then assess the path to a custom "Sina" word (Espressif's training pipeline — known to be non-trivial).
+- **Decision point:** custom "Sina" / acceptable stock word / fallback. The fallback (continuous audio streaming to the Pi) breaks both the centralization economics and the post-wake-only privacy invariant — treat it as last resort.
+- **Exit criteria:** A wake word demonstrably runs on the node, and the wake-word choice is made.
+
+### Phase 5 — Central Pi brain
+
+**Goal:** Replace the Mac with the one-per-home Pi 5 brain.
+
+- Provision a Raspberry Pi 5 (8GB) with Raspberry Pi OS Lite (64-bit).
 - **Default to `llama.cpp` with a Q4 quant of the chosen model** (not Ollama) — expect ~5–8 tok/s for qwen2.5:3b on Pi 5; a short tool-call output lands in ~2–4s, but there's no headroom for repaging. If Ollama is used, set `OLLAMA_KEEP_ALIVE=-1` so the model stays resident — the Mac Air memory-pressure incident (100–200s latencies) is the failure mode to avoid.
-- Re-run the Phase 1 benchmark on the Pi to verify accuracy and measure new latency.
-- Install `whisper.cpp` with `tiny.en` on the Pi (upgrade to `base.en` only if accuracy demands it and latency allows).
-- Wire the IR emitter module directly to Pi GPIO (3 jumper wires, no solder).
-- Port the IR transmission logic from Arduino C++ to Python using `pigpio` (which supports precise microsecond-level pulse timing required for IR).
-- Port `brain.py` to run on the Pi with the same tool schema, but now executing GPIO calls instead of HTTP requests.
+- Install `whisper.cpp` with `tiny.en` (upgrade to `base.en` only if accuracy demands it and latency allows). Keep **both** models resident — load-on-demand costs 1–3s per cold command.
+- Run `free -h` with the SLM and Whisper both loaded — the one measurement that decides usability. If it thrashes: shrink the Whisper model first, then consider eviction.
+- Re-run the Phase 1 benchmark on the Pi for real accuracy/latency numbers.
+- Port `brain.py` + validation gate; commands go out over LAN to the node (same HTTP+token contract as Phase 4).
 - Add `systemd` service for auto-start on boot.
-- **Exit criteria:** A single Pi, plugged into the wall with a USB mic attached, controls the AC via voice. No Mac, no ESP32, no network calls.
+- **Exit criteria:** Pi is the brain — voice command via the node's audio path (or Mac mic as interim), AC responds, no Mac in the loop.
 
-### Phase 6 — Wake word + always-on listening
+### Phase 6 — Node firmware: ambient listening
 
-**Goal:** Remove push-to-talk; make the unit ambient.
+**Goal:** Remove push-to-talk; the room node becomes the ears.
 
-- Integrate `openWakeWord` with a custom-trained "Sina" wake word.
-- Tune VAD (voice activity detection) to minimize false positives.
-- Add an LED indicator (one more jumper wire) showing listening state.
-- **Exit criteria:** Saying "Sina, set the bedroom to 22" anywhere in the room triggers the AC, with no button presses.
+- Wake word runs **on the node** (per the Phase 4.5 decision); node streams only post-wake command audio to the Pi (Wyoming protocol / ESPHome satellite).
+- Node receives the resulting command back and fires IR.
+- Tune VAD to minimize false positives; add an LED indicator showing listening state.
+- **Exit criteria:** Saying "Sina, set the bedroom to 22" anywhere in the room triggers the AC — no button, no Mac.
 
 ### Phase 6.5 — Voice feedback (TTS)
 
-**Goal:** Close the interaction loop — the unit confirms what it did.
+**Goal:** Close the interaction loop — the system confirms what it did.
 
-- Integrate [Piper](https://github.com/rhasspy/piper) (fully offline TTS, runs comfortably on Pi 5).
+- Integrate [Piper](https://github.com/rhasspy/piper) on the Pi (fully offline TTS, runs comfortably on Pi 5).
 - Speak short confirmations: "set to 22", "AC off", "sorry, I didn't get that".
 - `get_state` responses become spoken ("I don't know the current state" until/unless two-way IR exists).
-- **Exit criteria:** Every accepted command gets a spoken confirmation; every rejection gets a spoken error, all offline.
+- Open question: audio out on the node needs a small I2S speaker/amp (~$3, e.g. MAX98357A) — decide whether feedback is worth the extra part per room.
+- **Exit criteria:** Every accepted command gets a spoken confirmation; every rejection a spoken error, all offline.
 
 ### Phase 7 — Multi-room replication
 
-**Goal:** Clone the unit. Drop it in another room.
+**Goal:** Clone the node. Drop it in another room.
 
-- Document the full build (firmware + OS image + IR codebook + config).
-- Image the SD card from the first working unit.
-- Flash the image to a second Pi.
-- Update the unit's config with the room name and any room-specific IR variations.
-- Verify second unit works standalone.
-- **Exit criteria:** Two independent rooms, each with its own self-contained Sina unit.
+- Document the full node build (firmware + wiring + config).
+- Flash a second ESP32-S3 node; set its room identity in config; register it with the Pi (config map).
+- Verify both rooms work independently against the one Pi.
+- **Exit criteria:** Two rooms live off one brain; adding a third is a documented ~$16 clone.
 
 ### Phase 8 (optional, future) — Whole-home commands & the No-Internet-Home platform
 
@@ -228,10 +239,10 @@ Caveat: on a Mac Air with 8GB RAM, running Whisper-base.en and `sina-medium` con
 
 **8a — Whole-home AC commands (the original scope):**
 
-- Lightweight LAN discovery via mDNS/Zeroconf (`_sina._tcp.local`, each unit advertises room name + capabilities).
-- Inter-unit RPC over the LAN: same HTTP+token pattern as Phase 4, peer-to-peer — **no master unit, no broker**. Any unit can broadcast; every unit remains fully standalone if the network is down.
-- Add a `broadcast` tool to the SLM schema ("turn off all ACs").
-- **Exit criteria:** Saying "Sina, turn everything off" from any room kills every AC in the house; unplugging any unit changes nothing for the others.
+- With the central-brain architecture this is nearly free: the Pi already knows every node, so "turn off all ACs" is a fan-out from the Pi to each registered node.
+- Add a `broadcast` tool (or room scope `all`) to the SLM schema.
+- Optional: move node registration from the static config map to mDNS/Zeroconf (`_sina._tcp.local`) so new nodes self-announce.
+- **Exit criteria:** Saying "Sina, turn everything off" from any room kills every AC in the house.
 
 **8b — Scalability groundwork (design now, build later):**
 
@@ -252,7 +263,9 @@ Caveat: on a Mac Air with 8GB RAM, running Whisper-base.en and `sina-medium` con
 | IR LED range insufficient | Medium | Low | Use pre-built module with driver transistor; physical placement matters more than power |
 | LG AC has multiple IR protocol variants | Low | Medium | Phase 3 recon catches this; we record from the actual remote, not from a generic library |
 | State drift (manual remote use desyncs system) | N/A | None | Stateless by design — system does not track AC state. Each command carries the full target state in the IR frame. Status queries (e.g. "what temp is it on?") are answered by IR query if Phase 3 finds a two-way code, otherwise the agent returns "unknown" |
-| Pi SD card corruption from frequent writes | Medium | Medium | Use A2-rated card; minimize logging to disk; consider NVMe HAT for primary unit |
+| Pi SD card corruption from frequent writes | Medium | Medium | Use A2-rated card; minimize logging to disk; consider NVMe HAT for the brain |
+| Custom "Sina" wake word infeasible on ESP32-S3 | Medium | High | ESP-SR custom words need Espressif's training pipeline. Phase 4.5 spike decides: custom / stock word / rethink — **before** buying multiple nodes |
+| Central Pi or Wi-Fi down = whole house down | Low | Medium | Accepted tradeoff of centralizing. Nodes are dumb+stateless, so a promote-to-standalone path stays open |
 | Wake word false positives | Medium | Low | Tune sensitivity; require post-wake-word grammar match |
 | Power outage kills units | Low | Low | USB PSUs are cheap to back up with a small UPS if it matters |
 
@@ -262,8 +275,8 @@ Caveat: on a Mac Air with 8GB RAM, running Whisper-base.en and `sina-medium` con
 
 - **No data leaves the LAN.** All inference is local. No cloud APIs, no telemetry, no analytics.
 - **No accounts required.** No vendor logins, no OAuth, no tokens to rotate.
-- **Microphone always-on (Phase 6).** Wake-word detection runs locally; only audio after the wake word is sent to Whisper. No continuous recording.
-- **LAN exposure.** ESP32s in Phase A and inter-unit RPC in Phase 8 are unauthenticated by design (trust the home LAN). If the LAN is hostile, this needs rethinking.
+- **Microphone always-on (Phase 6).** Wake-word detection runs **on the node**; only post-wake-word audio ever leaves the room (over the LAN to the Pi). No continuous recording or streaming — this is an invariant, not an optimization.
+- **LAN exposure.** Node endpoints and node↔Pi traffic are protected by a shared static token (Phase 4); beyond that the home LAN is trusted. If the LAN is hostile, this needs rethinking.
 - **Firmware reproducibility.** All firmware and config is version-controlled. SD card images are documented.
 
 ---
@@ -299,17 +312,18 @@ The project is "done" (Phase 7 complete) when:
 ## 12. Open Questions
 
 - **Whisper model size on the Pi:** `tiny.en` is fast but error-prone; `base.en` is more accurate but may push latency past 3s. Benchmark in Phase 5.
-- **GPIO IR encoding library:** `pigpio` is the standard but the API is finicky. Worth a small spike before committing.
-- **Wake word training:** Custom "Sina" wake word requires recording ~100 samples. Plan a focused recording session in Phase 6.
+- **ESP32-S3 antenna variant (blocks the hardware order):** N16R8 boards ship with either a printed PCB antenna (squiggle trace — good) or a u.FL connector needing a separate external antenna. Confirm from the listing photo before buying.
+- **Custom "Sina" wake word on the S3:** Espressif's ESP-SR training pipeline, stock word, or fallback. Phase 4.5 spike decides.
+- **Node audio-out for TTS feedback:** needs an I2S amp/speaker (~$3/room). Decide at Phase 6.5.
 - ~~Multi-unit sync (Phase 8): mDNS vs. MQTT broker on a master unit.~~ **Decided 2026-07-03: mDNS + peer-to-peer HTTP.** A broker creates a master unit, which violates the no-cross-room-dependency principle. See Phase 8.
 - **`get_state`:** LG ACs almost universally have no two-way IR. Working assumption: `get_state` returns "unknown" permanently (Phase 6.5 speaks it). Keep the tool — it correctly absorbs state questions that would otherwise misroute — but don't build anything expecting real state.
 
 ---
 
-## 13. Next Steps (as of 2026-07-03)
+## 13. Next Steps (as of 2026-07-04)
 
-1. **Rebuild the Ollama models** (`ollama create sina-small/-medium -f ...`) — the Modelfiles gained the `set_preset` tool.
-2. **Re-run the benchmark** (88 cases now) to measure the effect of structured outputs + clamp guard + `set_preset` on accuracy and the latency tail. Expect ambiguous and adversarial to jump.
-3. **Phase 3 capture session:** wire the VS1838B, flash `esp32/ir_decoder/`, capture the LG remote into `ir_codes/lg_ac.json`. This is the critical path.
-4. **Phase 4:** ESP32 IR server sketch with token auth; point `brain.py` at it.
-5. Re-run the benchmark as a regression gate after **every** prompt or model change — it's a one-liner (`python benchmark.py`), treat it like a test suite.
+1. **Order the Phase 3–4 hardware** (see `hardware.md`): one ESP32-S3 N16R8 (check antenna variant), VS1838B, IR transmitter module, INMP441, breadboard/jumpers/data cable. The recon board becomes room node #1.
+2. **Phase 3 capture session** when parts arrive: wire the VS1838B, flash `esp32/ir_decoder/`, capture the LG remote into `ir_codes/lg_ac.json`. Critical path.
+3. **Phase 4:** node IR server sketch with token auth; point `brain.py` at it.
+4. **Phase 4.5 wake-word spike** before buying more nodes.
+5. Re-run the benchmark as a regression gate after **every** prompt or model change — it's a one-liner (`python benchmark.py`), treat it like a test suite. (2026-07-03 changes — structured outputs, clamp guard, `set_preset` — benchmarked 2026-07-04.)

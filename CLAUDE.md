@@ -1,14 +1,15 @@
 # CLAUDE.md — Project Sina
 
-Local, offline, voice-controlled AC agent. Mac-hosted brain now (Phase A), self-contained Raspberry Pi 5 units per room as the end state (Phase B). Read `project_sina_plan.md` before making design decisions; `README.md` for setup/usage.
+Local, offline, voice-controlled AC agent. Mac-hosted brain now (Phase A); end state (Phase B, revised 2026-07-04) is **one central Raspberry Pi 5 brain + cheap ESP32-S3 satellite nodes per room** (mic + on-device wake word + IR emitter, ~$16/room). Read `project_sina_plan.md` before making design decisions; `README.md` for setup/usage.
 
 ## Design invariants — do not violate
 
 1. **Offline-only at runtime.** Zero internet calls after initial setup downloads. No cloud APIs, no telemetry, no vendor accounts. Anything requiring the internet at runtime is wrong by definition.
 2. **Stateless command model.** The system never tracks AC state. Every command carries its full target state in the IR frame (how LG remotes work anyway). `get_state` returns "unknown" — keep it that way rather than building a synthetic state mirror. Per-room `default_preset` in `mac/config.json` is *config*, not state.
 3. **Fail safe, not fail helpful.** Ambiguous / out-of-range / adversarial input resolves to `tool: none`, never to a guessed or clamped command. Firing a wrong IR command is worse than doing nothing.
-4. **No cross-room dependencies.** Each unit is standalone; no master node, no broker. Phase 8 LAN features are peer-to-peer and optional.
-5. **No-solder hardware.** Pre-pinned dev boards, breakout modules, jumper wires only.
+4. **Nodes are dumb and stateless.** All inference lives on the one Pi brain; nodes do wake word, audio capture, and IR only. No per-node smarts, no state, so any node can be reflashed/cloned trivially (and promoted to standalone later if ever needed).
+5. **Only post-wake-word audio leaves the room.** Nodes never stream continuously to the Pi. This is a privacy invariant, not an optimization — the fallback of Pi-side wake word on a continuous stream is a last resort.
+6. **No-solder hardware.** Pre-pinned dev boards, breakout modules, jumper wires only.
 
 ## Conventions
 

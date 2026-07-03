@@ -2,7 +2,9 @@
 
 A local, offline, voice-controlled AI agent for home appliance control. Listens for voice commands, runs a small language model locally, emits IR signals to control AC units. No cloud, no accounts, no telemetry.
 
-See [`project_sina_plan.md`](./project_sina_plan.md) for the full plan, phasing, BOM, risks, and next steps.
+End-state architecture (revised 2026-07-04): **one central Raspberry Pi 5 brain** (Whisper + SLM + validation) and a **~$16 ESP32-S3 node per room** (mic, on-device wake word, IR emitter). Only post-wake-word audio ever leaves a room.
+
+See [`project_sina_plan.md`](./project_sina_plan.md) for the full plan, phasing, BOM, risks, and next steps; [`hardware.md`](./hardware.md) for the shopping list.
 
 ## Status
 
