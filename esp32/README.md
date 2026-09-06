@@ -18,12 +18,16 @@ The whole flash/monitor loop is scriptable, which matters when capturing dozens 
 ```sh
 brew install arduino-cli
 arduino-cli config init
+# Keep the sketchbook OUT of ~/Documents — see the iCloud note below.
+arduino-cli config set directories.user ~/Arduino
 arduino-cli config set board_manager.additional_urls \
   https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json
 arduino-cli core update-index
 arduino-cli core install esp32:esp32      # large toolchain, several minutes
 arduino-cli lib install IRremoteESP8266
 ```
+
+**Do not leave the sketchbook in `~/Documents` on an iCloud-synced Mac.** `arduino-cli` defaults there, and iCloud eventually evicts the library files to the cloud. The failure is confusing: `ls` still lists every filename (they're placeholders), but reading one stalls and the compile dies with `fatal error: IRremoteESP8266.h: No such file or directory` — on a library that installed fine and compiled fine an hour earlier. `arduino-cli lib list` also reports "No libraries installed" while the folder plainly exists. Point `directories.user` at a non-synced path and reinstall.
 
 ### Board gotchas (ESP32-S3 N16R8 on a USB-C-only Mac)
 
