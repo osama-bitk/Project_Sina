@@ -42,7 +42,15 @@
   },
   "commands": {
     "power_off": "0x88C0051",
-    "_power_on_note": "There is no separate power-on frame: any state frame turns the unit on with that state, which is what makes the stateless model work. 0x8800606 was also observed from the power button and is not yet identified — do not use it until verified with the transmitter."
+    "_power_on_note": "There is no separate power-on frame: any state frame turns the unit on with that state, which is what makes the stateless model work. 0x8800606 was also observed from the power button and is not yet identified — do not use it until verified with the transmitter.",
+    "jet": "0x8810089",
+    "_jet_note": "LG calls this 'Po' on the display. Verified in isolation: one press emits exactly this one frame. The remote exits jet by sending a normal STATE frame (observed: 0x880834F = cool/18C/high), NOT by resending this code — so this reads as 'enter jet', not 'toggle jet', and stays stateless. Exiting jet therefore needs no dedicated code: any state frame does it, which set_preset already fires. TO VERIFY IN PHASE 4: send this frame while the unit is already in jet and confirm it does not exit — if it does, this is a toggle after all and must be exposed as such.",
+    "light_toggle": "0x88C00A6",
+    "_light_note": "Toggles the unit's display light. Confirmed a BLIND TOGGLE: identical frame every press, and the light went off then back on. There is no separate on/off code and no way to read current state, so the resulting state is genuinely unknowable — expose it as toggle_light, never as set_light(on=bool), per invariant 3. This is the one command where 'fire and cannot verify' is inherent rather than a gap in the capture.",
+    "_unidentified": {
+      "0x8800606": "seen from the power button",
+      "0x88C0F50": "seen during the jet/sleep batch; shares the 0xC command marker with power_off"
+    }
   },
   "verified_samples": {
     "_comment": "Every entry below was captured from the physical remote and passes the LG checksum. mac/lg_ir.py regenerates each one as its self-test.",
