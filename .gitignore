@@ -21,5 +21,7 @@ build/
 
 # Local artifacts
 *.log
+# ...except the Phase 3 IR captures: primary evidence, needs the physical remote to redo
+!ir_codes/raw/*.log
 benchmarks/results/
 *.wav
