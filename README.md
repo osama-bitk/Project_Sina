@@ -8,12 +8,13 @@ See [`project_sina_plan.md`](./project_sina_plan.md) for the full plan, phasing,
 
 ## Status
 
-**Phase 3 in progress: IR reconnaissance against the LG remote.**
+**Phase 3 complete (2026-09-06). Phase 4 next: IR transmission.**
 
 - Phase 1: benchmark harness + prompt built on qwen2.5. **Re-evaluated 2026-07-04: production model is `sina-medium-v2` (qwen3:4b)** — 93% overall, ≥96% on all four core categories, the first model to meet the plan §3 objective. `sina-small-v2` (qwen3:1.7b, 81%, ~3.4s/call) is the Mac interactive default; the 4B is the Pi-brain target.
 - Phase 2: `mac/voice.py` records, transcribes via `faster-whisper`, pipes to `brain.parse`.
 - 2026-07-03 hardening: structured outputs (schema-constrained generation), out-of-range clamp guard, `set_preset` tool backed by `mac/config.json`, `think=False` for qwen3 (hidden reasoning tokens otherwise cost ~60s/call).
-- Phase 3: ESP32 decoder sketch + capture procedure ready in [`esp32/README.md`](./esp32/README.md). Awaiting captured codes in `ir_codes/lg_ac.json`.
+- **Phase 3: LG remote captured and the frame encoding solved** — see [IR codebook](#ir-codebook-ir_codes) below. `mac/lg_ir.py` builds any frame from a target state; its self-test reproduces all 23 captured frames.
+- Phase 4 (next): emitter is wired to GPIO4, receiver still on GPIO15. Plan is a closed-loop self-test (transmit → decode own transmission) before adding Wi-Fi.
 
 ## Repo layout
 
@@ -21,11 +22,11 @@ See [`project_sina_plan.md`](./project_sina_plan.md) for the full plan, phasing,
 |---|---|---|
 | `project_sina_plan.md` | — | The full project plan. Start here. |
 | `CLAUDE.md` | — | Project conventions and design invariants. |
-| `mac/` | 1–2 | Mac-hosted brain: Ollama tool-calling, Whisper STT, benchmark harness. |
+| `mac/` | 1–4 | Mac-hosted brain: Ollama tool-calling, Whisper STT, benchmark harness, LG IR frame encoder (`lg_ir.py`) and capture decoder (`decode_capture.py`). |
 | `esp32/` | 3–4 | ESP32 firmware: IR recon receiver, IR transmission HTTP server. Has its own README (hands-on wiring + capture procedure). |
 | `pi/` | 5+ | Raspberry Pi edge unit — the end-state device. Not started; blocked on Phase 4. |
 | `benchmarks/` | 1+ | Tool-calling accuracy test suite + results. |
-| `ir_codes/` | 3 | Captured LG AC IR codebook (JSON). Empty until Phase 3 capture. |
+| `ir_codes/` | 3 | LG AC frame encoding + verified samples (`lg_ac.json`), raw serial captures (`raw/`). |
 
 ## Setup (Mac brain)
 
@@ -90,10 +91,32 @@ Accuracy target (plan §3): ≥95% on literal/colloquial/state-query/off-topic; 
 
 ## IR codebook (`ir_codes/`)
 
-JSON keyed by command, produced by the Phase 3 capture session (procedure in `esp32/README.md`):
+LG sends the entire desired state in every frame — that's what makes the stateless design viable. So the codebook is **not** a button lookup table: Phase 3 solved the encoding, and `mac/lg_ir.py` constructs whatever frame is needed.
 
-```json
-{"power_on": {"protocol": "LG2", "bits": 28, "hex": "0x88C0051"}}
+Protocol **LG2**, 28 bits, 38 kHz:
+
+```
+0x88 <n3> <mode> <temp> <fan> <checksum>
+  n3    0 = state frame, 1 = jet, C = special command
+  temp  temp_c - 15        (16C -> 0x1 ... 30C -> 0xF)
+  mode  cool 0x8, dry 0x9, fan 0xA, auto 0xB
+  fan   low 0x0, med 0x2, high 0x4, auto 0x5
+  csum  sum of the six preceding nibbles & 0xF
 ```
 
-LG remotes send the entire desired state in each frame — that's what makes the stateless design viable.
+```sh
+python mac/lg_ir.py --temp 22 --mode cool --fan auto   # -> 0x8808754
+python mac/lg_ir.py --off                              # -> 0x88C0051
+python mac/lg_ir.py --selftest                         # regenerate all 23 captured frames
+```
+
+Discrete commands: `power_off` `0x88C0051`, `jet` ("Po") `0x8810089`, `light_toggle` `0x88C00A6`.
+
+**There is no power-on frame.** The remote remembers the last state and resends it as a full frame, so "on" is just a state frame. Sina can't reproduce "last state" — tracking it is the synthetic state mirror invariant 2 forbids — so `set_power: on` fires the `default_preset` from `mac/config.json` (config, not state). Unverified: `0x8800606` from the power button doesn't parse as a state frame (mode nibble `0x0` is outside the valid `0x8`–`0xB`), so it's another command class; Phase 4 confirms.
+
+`ir_codes/lg_ac.json` holds the field encodings plus every verified sample; `ir_codes/raw/` keeps the original serial captures as primary evidence. `mac/decode_capture.py` decodes raw timing dumps and checks the LG checksum — needed because `IRremoteESP8266` mislabels some clean frames as `UNKNOWN`.
+
+**Two constraints this unit imposes:**
+
+- **No heat mode** (cycle is cool → auto → dry → fan), so `set_mode: heat` has no frame to fire. Unresolved — see plan §7 Phase 4.
+- **Light is a blind toggle**: one code, no on/off pair, no way to read state. Exposed as `toggle_light`, never `set_light(on=bool)` — the name has to admit the result is unknowable (invariant 3).

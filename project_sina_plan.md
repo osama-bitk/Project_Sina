@@ -60,6 +60,31 @@ Per room:
 - **Node ↔ Pi protocol:** don't invent one. The ESPHome voice-satellite firmware / Wyoming protocol (Rhasspy ecosystem) solve exactly this shape (S3 + INMP441 streaming post-wake audio to a Linux brain), offline-friendly. Even with custom firmware, adopt the Wyoming protocol. Discovery: static IPs + a config map first, mDNS later. Each node's config carries its room identity so commands route to the right AC.
 - **Accepted tradeoffs:** Pi or Wi-Fi down = whole house down; simultaneous commands from different rooms queue (~5s each). Both acceptable at household scale. Nodes stay dumb and stateless, so a "promote a node to standalone unit" path remains open if the single point of failure ever bites.
 
+### 4.1 Network fabric (added 2026-07-07)
+
+"Offline at runtime" means no internet — it does not mean no network. The nodes and the Pi still need a working IP fabric: an access point, DHCP, and name resolution. The sections above cover addressing (static IPs → mDNS later), the app protocol (Wyoming), and auth (shared token); this section decides what physically provides the network.
+
+**Decision: Sina gets its own isolated LAN, not the home Wi-Fi.** A dedicated access point with **no WAN uplink at all** — Sina traffic never touches the internet path. Rationale:
+
+- The home internet here is STC 5G behind CGNAT on a dual-ZTE setup with peak-hour congestion. None of that can affect a network it never traverses. This turns a constraint we'd otherwise fight into a non-issue by design.
+- It makes offline-only **structural** rather than behavioral: there is no uplink to accidentally depend on.
+- It shrinks the §9 "trusted LAN" assumption from "everything on the home network is trusted" to "only Sina devices exist on this network" — the shared-token threat model gets much simpler.
+- Cost: one cheap router (~$15–25) and a second SSID to manage. Acceptable.
+
+**AP choice: dedicated cheap router in AP mode, WAN port empty; the Pi wired to it over Ethernet.** Pi-as-AP (hostapd + dnsmasq) was considered and rejected for now: it saves a box but loads AP duty onto the same device doing Whisper + SLM inference, and the Pi 5's onboard Wi-Fi serving 5+ nodes under concurrent post-wake streams is an unproven claim, not a fact. Revisit only if the extra box becomes a real problem. The Pi is already the single point of failure — wiring it removes Wi-Fi association drops as a second failure mode for the brain. Nodes are Wi-Fi by necessity (they're scattered in rooms); the brain isn't.
+
+**Addressing: DHCP reservations by MAC on the Sina router**, mirrored in the Pi's config map. Reservations beat truly-static per-node config at 5+ nodes: one place to manage, and a reflashed node keeps its address with zero firmware changes (keeps nodes dumb, per invariant 4).
+
+**Bandwidth is not the risk; stability is.** Post-wake audio is ~256 kbps/node (16 kHz 16-bit PCM) — five nodes streaming simultaneously is trivial. The real questions are association stability and AP behavior under concurrent streams, which is a different test (Phase 6, below).
+
+**Verification steps (each is a claim to test, not assume):**
+
+1. **Offline-router check (before Phase 5):** with the WAN port empty, confirm the candidate router still serves DHCP, resolves nothing gracefully (no captive-portal redirect, no fail-closed DNS), and passes LAN traffic indefinitely. Some consumer routers misbehave without upstream internet — verify on the actual hardware.
+2. **mDNS on the isolated LAN (Phase 8 prerequisite):** confirm `_sina._tcp.local` discovery works with no upstream DNS. It should (mDNS is link-local by design), but it's exactly the kind of thing that breaks silently.
+3. **Concurrent-stream soak (Phase 6):** two-plus nodes streaming post-wake audio simultaneously while the Pi serves inference — watch for association drops, not throughput.
+
+**Timing:** none of this blocks Phases 3–4 — Mac-hosted development rides the home Wi-Fi (the Mac stands in for the Pi and needs its normal network anyway). The isolated LAN is built at **Phase 5**, when the Pi comes online: the router in AP mode is part of that phase's setup, and the Phase 4 node re-homes onto the Sina SSID with a config change only.
+
 ---
 
 ## 5. Technology Stack
@@ -94,7 +119,8 @@ Per room:
 | MicroSD 64GB (A2 rated) | $12 | Or NVMe HAT for longevity |
 | Active cooler for Pi 5 | $10 | Mandatory under sustained inference load |
 | Pi case with cooler cutout | $10 | Cosmetic but useful |
-| **Brain total** | **~$125** | Once, not per room |
+| Cheap router for the isolated Sina LAN (AP mode, WAN empty) | $15–25 | Model TBD — must pass the §4.1 offline-router check. Short Ethernet cable to the Pi included or ~$2 |
+| **Brain total** | **~$145** | Once, not per room |
 
 **Per-room node:**
 
@@ -171,31 +197,58 @@ The 2026-07-03 benchmark showed structured outputs cut latency dramatically (med
 
 Caveat: on a Mac Air with 8GB RAM, running Whisper-base.en and `sina-medium` concurrently produced 100–200s LLM latency per call (vs. ~5s headless benchmark). Ollama is repaging the model under memory pressure. Workaround: `--model sina-small --whisper tiny.en`. The dedicated Pi unit in Phase 5 won't share this constraint, though latency on Pi 5 will be its own story.
 
-### Phase 3 — Hardware reconnaissance (ESP32 + IR receiver)
+### Phase 3 — Hardware reconnaissance (ESP32 + IR receiver) — **COMPLETE 2026-09-06**
 
 **Goal:** Capture the exact IR protocol used by the LG AC remote.
 
-- Order ESP32 dev board, VS1838B IR receiver, IR transmitter module, breadboard, jumper wires.
-- Install Arduino IDE on the Mac, add ESP32 board support.
-- Wire the IR receiver (3 jumper wires — no solder).
-- Flash a raw IR decoder sketch using `IRremoteESP8266`.
-- Point the physical LG remote at the receiver. Press every button. Capture and log: power on/off, every temperature setting 16°C–30°C, every fan mode, every preset.
-- Confirm the LG protocol variant.
-- Save the codes as a JSON dictionary keyed by command.
-- **Exit criteria:** A complete IR codebook for the LG AC, validated against the receiver.
+**Outcome: better than planned.** We did not build a button lookup table — we solved the frame encoding, so the brain can construct any state frame on demand. This is what invariant 2 (stateless, full target state per frame) actually wants, and it collapses what would have been hundreds of state-combination entries into one encoder.
+
+The frame (protocol **LG2**, 28 bits, 38 kHz):
+
+```
+0x88 <n3> <mode> <temp> <fan> <checksum>
+  n3    0 = state frame, 1 = jet, C = special command (power-off, light)
+  temp  temp_c - 15          (16C -> 0x1 ... 30C -> 0xF)
+  mode  cool 0x8, dry 0x9, fan 0xA, auto 0xB
+  fan   low 0x0, med 0x2, high 0x4, auto 0x5
+  csum  sum of the six preceding nibbles & 0xF
+```
+
+- Codebook and captures: `ir_codes/lg_ac.json`, raw logs in `ir_codes/raw/`. Encoder: `mac/lg_ir.py`.
+- **Validation:** `python mac/lg_ir.py --selftest` regenerates all 23 frames captured across the temp, fan, and mode sweeps. That reproduction — not the captures alone — is the evidence the decoding is correct.
+- Discrete commands captured: `power_off` `0x88C0051`, `jet` (LG "Po") `0x8810089`, `light_toggle` `0x88C00A6`. There is no power-on frame: any state frame powers the unit on.
+
+**What the capture changed about the design:**
+
+- **No heat mode on this unit.** The cycle is cool → auto → dry → fan. LG's ordering implies heat would be `0xC`, but that is unverified and must not be fired. `set_mode: heat` currently has no frame — either drop `heat` from the schema or resolve it to `none`. Decide in Phase 4.
+- **Light is a blind toggle.** Identical frame every press, no on/off pair, no way to read state. Its result is inherently unknowable, so it must be exposed as `toggle_light`, never `set_light(on=bool)` — a name the model can't act on overconfidently (invariant 3).
+- **Jet reads as "enter jet", not "toggle jet"** — the remote exits jet by sending a normal state frame instead of resending the jet code, so it stays stateless. Still to confirm in Phase 4: resending it while already in jet must not exit.
+- Two frames remain unidentified (`0x8800606` from the power button, `0x88C0F50`). Recorded, unused, not guessed at.
+
+**Practical notes for anyone repeating this (see `esp32/README.md` for the full procedure):**
+
+- Toolchain is `arduino-cli`, not the Arduino IDE GUI — the whole flash/monitor loop is scriptable.
+- `IRremoteESP8266` labels some perfectly clean frames `UNKNOWN` (a footer/gap edge case). `mac/decode_capture.py` decodes the raw timing dumps directly and verifies the LG checksum, which is more trustworthy anyway — a valid checksum proves the frame was read correctly.
+- Capture in **controlled batches where no two consecutive presses produce the same code**. Then a repeated code is provably a repeat frame, not a second press, which removes all press/frame ambiguity. Isolate single buttons (one press, nothing else) for discrete commands.
+
+- **Exit criteria:** ~~A complete IR codebook for the LG AC, validated against the receiver.~~ **Met** — encoder reproduces every captured frame.
 
 ### Phase 4 — IR transmission (ESP32 as dumb endpoint)
 
 **Goal:** Replicate the remote's behavior over Wi-Fi.
 
+**Design change from Phase 3:** the node does **not** hold the codebook. The brain builds the finished 28-bit frame with `mac/lg_ir.py` and sends it; the node just transmits what it is handed. This keeps nodes dumb and stateless (invariant 4) and means a codebook fix never requires reflashing a single node.
+
+- **Closed-loop self-test first, networking second.** Keep the VS1838B wired while adding the emitter, so the board can fire a frame and decode its own transmission. That proves `lg_ir.py` emits frames the hardware accepts, with no AC and no Wi-Fi in the loop. Only then add HTTP.
 - Reflash the ESP32 with a sketch that:
   - Connects to home Wi-Fi on a static IP.
   - Hosts a tiny async HTTP server.
-  - Exposes endpoints like `GET /ac?state=on&temp=22&fan=auto`.
+  - Accepts a finished frame (protocol/bits/hex), rather than command names to look up.
   - Requires a shared static token (`X-Sina-Token` header) on every request. ~5 lines of firmware; stops a misbehaving IoT device or guest on the LAN from cycling the AC. Token lives in config, not in the repo.
-  - On request, fires the matching IR code from the captured codebook.
 - Test from the Mac with `curl`. Confirm the AC physically responds.
 - Update `brain.py` to send HTTP requests to the ESP32 instead of printing dry-run logs.
+- Confirm the open Phase 3 questions against the real unit: resending `jet` while in jet, what `0x8800606` / `0x88C0F50` do, and whether `heat` exists at all.
+- Add the new tools once verified — `set_jet` and `toggle_light` — which per the conventions means Pydantic union member + Modelfile prompt rule + benchmark cases, then a benchmark re-run.
 - **Exit criteria:** End-to-end speech → AC control working through the Mac + ESP32 stack.
 
 ### Phase 4.5 — Wake-word spike (de-risk before buying more nodes)
@@ -211,6 +264,7 @@ Caveat: on a Mac Air with 8GB RAM, running Whisper-base.en and `sina-medium` con
 
 **Goal:** Replace the Mac with the one-per-home Pi 5 brain.
 
+- Stand up the isolated Sina LAN per §4.1: router in AP mode (WAN empty, offline-router check done beforehand), Pi wired to it, DHCP reservations for Pi + nodes. Re-home the Phase 4 node onto the Sina SSID.
 - Provision a Raspberry Pi 5 (8GB) with Raspberry Pi OS Lite (64-bit).
 - **Default to `llama.cpp` with a Q4 quant of the chosen model** (not Ollama) — expect ~5–8 tok/s for qwen2.5:3b on Pi 5; a short tool-call output lands in ~2–4s, but there's no headroom for repaging. If Ollama is used, set `OLLAMA_KEEP_ALIVE=-1` so the model stays resident — the Mac Air memory-pressure incident (100–200s latencies) is the failure mode to avoid.
 - Install `whisper.cpp` with `tiny.en` (upgrade to `base.en` only if accuracy demands it and latency allows). Keep **both** models resident — load-on-demand costs 1–3s per cold command.
@@ -291,7 +345,7 @@ Caveat: on a Mac Air with 8GB RAM, running Whisper-base.en and `sina-medium` con
 - **No data leaves the LAN.** All inference is local. No cloud APIs, no telemetry, no analytics.
 - **No accounts required.** No vendor logins, no OAuth, no tokens to rotate.
 - **Microphone always-on (Phase 6).** Wake-word detection runs **on the node**; only post-wake-word audio ever leaves the room (over the LAN to the Pi). No continuous recording or streaming — this is an invariant, not an optimization.
-- **LAN exposure.** Node endpoints and node↔Pi traffic are protected by a shared static token (Phase 4); beyond that the home LAN is trusted. If the LAN is hostile, this needs rethinking.
+- **LAN exposure.** Node endpoints and node↔Pi traffic are protected by a shared static token (Phase 4); beyond that the LAN is trusted. From Phase 5 the trusted LAN is the isolated Sina network (§4.1) — only Sina devices on it, no uplink — which makes the assumption structural rather than hopeful. During Phases 3–4 (dev on home Wi-Fi) the token is the only guard.
 - **Firmware reproducibility.** All firmware and config is version-controlled. SD card images are documented.
 
 ---
@@ -330,15 +384,24 @@ The project is "done" (Phase 7 complete) when:
 - **ESP32-S3 antenna variant (blocks the hardware order):** N16R8 boards ship with either a printed PCB antenna (squiggle trace — good) or a u.FL connector needing a separate external antenna. Confirm from the listing photo before buying.
 - **Custom "Sina" wake word on the S3:** Espressif's ESP-SR training pipeline, stock word, or fallback. Phase 4.5 spike decides.
 - **Node audio-out for TTS feedback:** needs an I2S amp/speaker (~$3/room). Decide at Phase 6.5.
+- **Sina router model:** any cheap router that passes the §4.1 offline-router check (serves DHCP and LAN traffic with the WAN empty, no captive-portal weirdness). Pick and verify before Phase 5; add to the BOM once chosen.
 - ~~Multi-unit sync (Phase 8): mDNS vs. MQTT broker on a master unit.~~ **Decided 2026-07-03: mDNS + peer-to-peer HTTP.** A broker creates a master unit, which violates the no-cross-room-dependency principle. See Phase 8.
 - **`get_state`:** LG ACs almost universally have no two-way IR. Working assumption: `get_state` returns "unknown" permanently (Phase 6.5 speaks it). Keep the tool — it correctly absorbs state questions that would otherwise misroute — but don't build anything expecting real state.
 
 ---
 
-## 13. Next Steps (as of 2026-07-04)
+## 13. Next Steps (as of 2026-09-06)
 
-1. **Order the Phase 3–4 hardware** (see `hardware.md`): one ESP32-S3 N16R8 (check antenna variant), VS1838B, IR transmitter module, INMP441, breadboard/jumpers/data cable. The recon board becomes room node #1.
-2. **Phase 3 capture session** when parts arrive: wire the VS1838B, flash `esp32/ir_decoder/`, capture the LG remote into `ir_codes/lg_ac.json`. Critical path.
-3. **Phase 4:** node IR server sketch with token auth; point `brain.py` at it.
+1. ~~Order the Phase 3–4 hardware.~~ **Done** — all Phase 3–4 parts in hand.
+2. ~~Phase 3 capture session.~~ **Done 2026-09-06** — see Phase 3 above. Codebook is an encoder, not a lookup table.
+3. **Phase 4 (resume here).** The emitter is already wired to **GPIO4**, VS1838B still on GPIO15.
+   1. Closed-loop self-test sketch: transmit a frame, decode it off the board's own receiver, confirm it matches. No AC, no Wi-Fi.
+   2. Point it at the AC and confirm it physically responds.
+   3. Answer the open Phase 3 questions on real hardware: does resending `jet` while in jet exit it; what are `0x8800606` and `0x88C0F50`; does this unit have heat at all.
+   4. `ir_server` sketch: static IP, tiny HTTP server, `X-Sina-Token` on every request, transmits the frame it is handed.
+   5. Point `brain.py` at it — dispatch the validated tool call through `lg_ir.py` to the node.
+   6. Add `set_jet` and `toggle_light` to the schema **after** the behaviour is confirmed (Pydantic + Modelfile + benchmark cases, then re-run the benchmark).
+   7. Decide `set_mode: heat` — drop it from the schema or resolve it to `none`.
 4. **Phase 4.5 wake-word spike** before buying more nodes.
-5. Re-run the benchmark as a regression gate after **every** prompt or model change — it's a one-liner (`python benchmark.py`), treat it like a test suite. (2026-07-03 changes — structured outputs, clamp guard, `set_preset` — benchmarked 2026-07-04.)
+5. **Before Phase 5:** pick the Sina LAN router and run the §4.1 offline-router check (DHCP + LAN traffic with the WAN port empty).
+6. Re-run the benchmark as a regression gate after **every** prompt or model change — it's a one-liner (`python benchmark.py`), treat it like a test suite. (2026-07-03 changes — structured outputs, clamp guard, `set_preset` — benchmarked 2026-07-04.)

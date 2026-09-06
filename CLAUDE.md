@@ -26,4 +26,9 @@ Local, offline, voice-controlled AC agent. Mac-hosted brain now (Phase A); end s
 
 ## Current status / next steps
 
-Phase 3 (IR capture) in progress. See plan §13 "Next Steps". Critical path: capture the LG remote into `ir_codes/lg_ac.json`.
+**Phase 3 complete (2026-09-06). Phase 4 (IR transmission) is next** — see plan §13 "Next Steps".
+
+- The IR codebook is an **encoder, not a lookup table**: `mac/lg_ir.py` builds any LG frame from a target state (LG puts full state in every frame). `ir_codes/lg_ac.json` holds the field encodings + verified samples; `ir_codes/raw/` holds the original captures. **Run `python mac/lg_ir.py --selftest` after touching the encoder or codebook** — it regenerates all 23 captured frames and is the regression gate for IR, the way `benchmark.py` is for the model.
+- **Nodes never hold the codebook.** The brain builds the finished frame and the node transmits what it's handed (invariant 4) — so a codebook fix never means reflashing nodes.
+- Hardware state: ESP32-S3 with VS1838B receiver on GPIO15 and IR emitter on GPIO4. Flash with `arduino-cli`; use the board's **`USB`** port (the `COM` port has no CC resistors and gets no power from a USB-C host). See `esp32/README.md` for the gotchas.
+- Unresolved, decide in Phase 4: this unit has **no heat mode** (so `set_mode: heat` has no frame), the **light is a blind toggle** (expose as `toggle_light`, never `set_light(on=bool)`), and `set_jet` needs confirming that resending jet while in jet doesn't exit it. Two frames (`0x8800606`, `0x88C0F50`) remain unidentified — recorded, unused, not guessed at.

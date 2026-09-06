@@ -42,7 +42,7 @@
   },
   "commands": {
     "power_off": "0x88C0051",
-    "_power_on_note": "There is no separate power-on frame: any state frame turns the unit on with that state, which is what makes the stateless model work. 0x8800606 was also observed from the power button and is not yet identified — do not use it until verified with the transmitter.",
+    "_power_on_note": "There is no separate power-on frame: any state frame turns the unit on with that state, which is what makes the stateless model work. The REMOTE (not the AC) remembers the last state and resends it as a full frame when powered on — which is why no distinct 'on' code exists. Sina deliberately cannot reproduce 'last state', since tracking it is exactly the synthetic state mirror invariant 2 forbids; set_power:on therefore fires the default_preset from mac/config.json, which is config rather than state. STILL UNVERIFIED: 0x8800606 was observed from the power button and does not parse as a state frame (its mode nibble is 0x0, outside the valid 0x8-0xB range), so it is some other command class. Confirm with the transmitter before relying on any of this.",
     "jet": "0x8810089",
     "_jet_note": "LG calls this 'Po' on the display. Verified in isolation: one press emits exactly this one frame. The remote exits jet by sending a normal STATE frame (observed: 0x880834F = cool/18C/high), NOT by resending this code — so this reads as 'enter jet', not 'toggle jet', and stays stateless. Exiting jet therefore needs no dedicated code: any state frame does it, which set_preset already fires. TO VERIFY IN PHASE 4: send this frame while the unit is already in jet and confirm it does not exit — if it does, this is a toggle after all and must be exposed as such.",
     "light_toggle": "0x88C00A6",

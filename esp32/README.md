@@ -7,18 +7,42 @@ Two Arduino sketches. The board is an **ESP32-S3 N16R8** — not throwaway: afte
 | `ir_decoder/` | 3 | Reads from VS1838B IR receiver, prints decoded protocol/bits/hex per button press. Used once to build the codebook. |
 | `ir_server/` | 4 | (TBD) HTTP endpoint on the LAN, fires captured IR codes on request. |
 
-## Phase 3: capture the LG remote
+## Phase 3: capture the LG remote — **done 2026-09-06**
 
-### One-time setup
+Kept as the procedure of record; it is how the codebook in `../ir_codes/` was produced. Results and the decoded frame format live in the root `README.md` and plan §7.
 
-1. **Arduino IDE.** Install Arduino IDE 2.x ([arduino.cc/downloads](https://arduino.cc/en/software)).
-2. **ESP32 board support.** File → Preferences → Additional Boards Manager URLs:
-   ```
-   https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json
-   ```
-   Then Tools → Board → Boards Manager → search "esp32" → install Espressif's package.
-3. **IRremoteESP8266 library.** Sketch → Include Library → Manage Libraries → search "IRremoteESP8266" → install.
-4. **Select board + port.** Tools → Board → ESP32 → pick your dev-board variant (DevKit V1 / WROOM-32 / NodeMCU-32S all work). Tools → Port → the new `/dev/cu.usbserial-*` that appears when you plug in the ESP32.
+### One-time setup (`arduino-cli`, no GUI)
+
+The whole flash/monitor loop is scriptable, which matters when capturing dozens of button presses.
+
+```sh
+brew install arduino-cli
+arduino-cli config init
+arduino-cli config set board_manager.additional_urls \
+  https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json
+arduino-cli core update-index
+arduino-cli core install esp32:esp32      # large toolchain, several minutes
+arduino-cli lib install IRremoteESP8266
+```
+
+### Board gotchas (ESP32-S3 N16R8 on a USB-C-only Mac)
+
+These cost real time; read them before assuming the board is dead.
+
+- **Use the port marked `USB`, not `COM`.** The COM port (USB-UART bridge) lacks the 5.1kΩ CC pull-down resistors, so a USB-C host delivers **no power at all** through it — no LED, no enumeration, nothing. The `USB` port goes to the S3's native USB and works. A dark power LED is a power problem, never a driver problem.
+- **No driver needed.** Native USB enumerates as `/dev/cu.usbmodem*`, Espressif VID `0x303a`.
+- **Manual bootloader entry.** Upload may fail with `No serial data received`. Hold **BOOT**, tap **RESET**, release **BOOT** — the board re-enumerates under a *different* port name, so rescan before uploading.
+- **`CDCOnBoot=cdc` is required** or `Serial` output goes to the UART pins instead of the USB port you're watching.
+- Pressing RESET drops the USB CDC device, which kills any attached serial reader — use one that reconnects.
+
+```sh
+FQBN="esp32:esp32:esp32s3:FlashSize=16M,PartitionScheme=app3M_fat9M_16MB,CDCOnBoot=cdc,USBMode=hwcdc,PSRAM=disabled"
+arduino-cli board list                       # find the port
+arduino-cli compile -b "$FQBN" ir_decoder/
+arduino-cli upload -p /dev/cu.usbmodemXXXX -b "$FQBN" ir_decoder/
+```
+
+PSRAM is disabled here because this sketch doesn't need it; the wake-word work in Phase 4.5 will need `PSRAM=opi` for the N16R8.
 
 ### Wiring (VS1838B → ESP32, 3 wires, no solder)
 
@@ -62,12 +86,21 @@ GPIO15 is the pin the sketch listens on. If you use a different GPIO, change `kR
 ### What "good capture" looks like
 
 - Same button → same hex value every time. Reproducibility is the smoke test.
-- Protocol field consistently reads `LG`, `LG2`, or similar — not `UNKNOWN`. If you see `UNKNOWN`, the sketch will also print a raw timing array; we'll fall back to replaying timings directly in Phase 4.
+- **`UNKNOWN` does not mean a bad capture.** `IRremoteESP8266` mislabels clean frames when the buffer ends right at the frame boundary with no trailing gap. Decode the raw timing array instead with `../mac/decode_capture.py`, which verifies the LG checksum — a valid checksum proves the frame was read correctly, which is stronger evidence than the library's label.
 - Bit count is consistent across all buttons of one type (e.g. all temp values are the same bit count; LG ACs encode full state in one frame).
+
+### Capture method that actually worked
+
+Two rules removed all the ambiguity:
+
+1. **Batch so that no two consecutive presses produce the same code** (e.g. sweep temp 16→30 rather than pressing one button repeatedly). Then a repeated code is provably a repeat frame from one press, not a second press. A monotonic sweep also self-validates: if the temp nibble increments exactly once per press with nothing else moving, the mapping cannot be misaligned.
+2. **Isolate discrete buttons** — clear the log, one press, nothing else. A multi-press batch of jet/sleep produced an alternating pattern that supported two different explanations; a single isolated press settled it immediately.
+
+For anything whose meaning depends on the display (fan labels, mode icons, whether a toggle went on or off), record what the remote showed — the IR alone cannot tell you which nibble means "medium".
 
 ### Exit criteria
 
-`ir_codes/lg_ac.json` has every required command captured and the same button produces the same hex on repeated presses. See the main plan §7 Phase 3.
+~~`ir_codes/lg_ac.json` has every required command captured and the same button produces the same hex on repeated presses.~~ **Met 2026-09-06** — exceeded, in fact: the frame encoding was solved, so `../mac/lg_ir.py` constructs any state frame and reproduces all 23 captured samples as its self-test. See the main plan §7 Phase 3.
 
 ## Hardware
 
