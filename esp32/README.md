@@ -5,7 +5,30 @@ Two Arduino sketches. The board is an **ESP32-S3 N16R8** — not throwaway: afte
 | Dir | Phase | Purpose |
 |---|---|---|
 | `ir_decoder/` | 3 | Reads from VS1838B IR receiver, prints decoded protocol/bits/hex per button press. Used once to build the codebook. |
-| `ir_server/` | 4 | (TBD) HTTP endpoint on the LAN, fires captured IR codes on request. |
+| `ir_bridge/` | 4 | **Current.** Takes a finished frame over serial (`SEND 0x8808754`) and transmits it. The node holds no codebook — the brain builds the frame (invariant 4). Drive it from `../mac/ir_send.py`. |
+| `ir_diag/` | 4 | Transmits every 2s and prints anything received. Splits a TX fault from an RX fault. |
+| `ir_blink/` | 4 | Drives the IR LED 0.5s on / 1.5s off so a phone camera can see whether it emits at all. |
+| `ir_selftest/` | 4 | Transmit-and-hear-yourself check. **Does not work on ESP32** — see below. |
+| `ir_server/` | 4 | (TBD) Same contract as `ir_bridge`, over HTTP with token auth instead of serial. |
+
+**Pins as wired:** emitter SIG → **GPIO14**, VCC → 5V, GND → GND. VS1838B OUT → **GPIO15**.
+
+### The closed-loop self-test does not work on ESP32
+
+`ir_selftest` transmits a frame and tries to decode it off its own receiver. It reports 0/8 even when both halves are provably fine. Receive is interrupt-driven, and during `sendLG2()` the CPU is busy generating the carrier, so the board misses the frame it is itself sending. Don't debug hardware based on this sketch failing — use `ir_diag` (RX confirmed by pressing the real remote, TX confirmed by phone camera) and then test against the actual AC.
+
+### Debugging an emitter that does nothing
+
+In order, cheapest first:
+
+1. **`ir_blink` + phone camera, lights off.** A protocol burst is ~60ms and nearly invisible; 0.5s solid is obvious. Front camera often works better — many rear cameras filter IR.
+2. **Confirm which module is which.** The emitter is a *clear/pale-blue LED*; the VS1838B receiver is an opaque *black dome*. Wiring a receiver as an emitter produces exactly the "TX silent, RX perfect" symptom.
+3. **Check pin order** — these modules ship as `GND/VCC/SIG`, `SIG/VCC/GND`, or `VCC/GND/SIG`. Swapping SIG and GND yields no light and no error.
+4. **VCC on 5V, not 3V3.** 3V3 works at a few centimetres and then stops.
+
+### Range is the open hardware problem (2026-09-07)
+
+The AC responds reliably at ~20cm and unreliably at 1m — far short of the several metres a room node needs. That pattern means an underdriven LED: real remotes pulse at hundreds of mA, a bare LED off a GPIO gets ~20mA. The module in use looks like a plain KY-005 (LED + resistor), not the driver-transistor module the BOM assumed. Options, in order: try the Grove emitter already on hand, then a module with a genuine driver transistor, then drive the LED harder. **This blocks Phase 7 (room deployment), not the protocol work, which is verified.**
 
 ## Phase 3: capture the LG remote — **done 2026-09-06**
 

@@ -8,13 +8,14 @@ See [`project_sina_plan.md`](./project_sina_plan.md) for the full plan, phasing,
 
 ## Status
 
-**Phase 3 complete (2026-09-06). Phase 4 next: IR transmission.**
+**Phase 4 in progress (2026-09-07): the AC responds to frames we build. Range is the open problem.**
 
 - Phase 1: benchmark harness + prompt built on qwen2.5. **Re-evaluated 2026-07-04: production model is `sina-medium-v2` (qwen3:4b)** — 93% overall, ≥96% on all four core categories, the first model to meet the plan §3 objective. `sina-small-v2` (qwen3:1.7b, 81%, ~3.4s/call) is the Mac interactive default; the 4B is the Pi-brain target.
 - Phase 2: `mac/voice.py` records, transcribes via `faster-whisper`, pipes to `brain.parse`.
 - 2026-07-03 hardening: structured outputs (schema-constrained generation), out-of-range clamp guard, `set_preset` tool backed by `mac/config.json`, `think=False` for qwen3 (hidden reasoning tokens otherwise cost ~60s/call).
 - **Phase 3: LG remote captured and the frame encoding solved** — see [IR codebook](#ir-codebook-ir_codes) below. `mac/lg_ir.py` builds any frame from a target state; its self-test reproduces all 23 captured frames.
-- Phase 4 (next): emitter is wired to GPIO4, receiver still on GPIO15. Plan is a closed-loop self-test (transmit → decode own transmission) before adding Wi-Fi.
+- **Phase 4 in progress: the AC physically obeys frames we construct.** `esp32/ir_bridge/` takes a finished frame over serial and transmits it; `mac/ir_send.py` drives it from the Mac. Confirmed on real hardware: `power_off` shuts the unit down. The node holds no codebook — the brain builds the frame (invariant 4), so the eventual switch from serial to HTTP changes neither side's job.
+- **Open: IR range.** Reliable at ~20cm, unreliable at 1m — an underdriven LED, not a protocol fault. Blocks room deployment, not the protocol work. See `esp32/README.md`.
 
 ## Repo layout
 
@@ -23,7 +24,7 @@ See [`project_sina_plan.md`](./project_sina_plan.md) for the full plan, phasing,
 | `project_sina_plan.md` | — | The full project plan. Start here. |
 | `CLAUDE.md` | — | Project conventions and design invariants. |
 | `mac/` | 1–4 | Mac-hosted brain: Ollama tool-calling, Whisper STT, benchmark harness, LG IR frame encoder (`lg_ir.py`) and capture decoder (`decode_capture.py`). |
-| `esp32/` | 3–4 | ESP32 firmware: IR recon receiver, IR transmission HTTP server. Has its own README (hands-on wiring + capture procedure). |
+| `esp32/` | 3–4 | ESP32 firmware: IR recon receiver, serial IR bridge, diagnostics. Has its own README (wiring, capture procedure, emitter debugging). |
 | `pi/` | 5+ | Raspberry Pi edge unit — the end-state device. Not started; blocked on Phase 4. |
 | `benchmarks/` | 1+ | Tool-calling accuracy test suite + results. |
 | `ir_codes/` | 3 | LG AC frame encoding + verified samples (`lg_ac.json`), raw serial captures (`raw/`). |
@@ -108,6 +109,11 @@ Protocol **LG2**, 28 bits, 38 kHz:
 python mac/lg_ir.py --temp 22 --mode cool --fan auto   # -> 0x8808754
 python mac/lg_ir.py --off                              # -> 0x88C0051
 python mac/lg_ir.py --selftest                         # regenerate all 23 captured frames
+
+# Actually fire it at the AC through the ESP32 bridge (Phase 4)
+python mac/ir_send.py --temp 22 --mode cool --fan auto
+python mac/ir_send.py --off
+python mac/ir_send.py --off --repeat 2 --count 10      # resend while aiming
 ```
 
 Discrete commands: `power_off` `0x88C0051`, `jet` ("Po") `0x8810089`, `light_toggle` `0x88C00A6`.
